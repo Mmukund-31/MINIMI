@@ -83,6 +83,31 @@ export function AssistantMessage({ message, onFollowUp, isLast }: { message: Mes
       )}
       <Markdown text={message.content} sources={sources} />
       {m.comparisons && m.comparisons.length > 0 && <ComparisonTable comparisons={m.comparisons} sources={sources} />}
+      {m.offering && m.offering.length > 0 && (
+        <div className="rounded-xl border border-zinc-200 px-3 py-2.5 text-[13px] dark:border-zinc-800">
+          <div className="mb-1.5 text-xs font-medium tracking-wide text-zinc-500 uppercase dark:text-zinc-400">Also offered now (not in the earlier answer)</div>
+          {m.offering.map((o) => (
+            <div key={o.subject} className="py-0.5 text-zinc-700 dark:text-zinc-300">
+              <span className="font-medium">{o.subject}:</span>{" "}
+              {o.plansNotDiscussed.map((p, i) => {
+                const s = sources.find((x) => x.id === p.sourceId);
+                return (
+                  <span key={p.plan}>
+                    {i > 0 && "; "}
+                    {p.plan} ({p.value})
+                    {s && (
+                      <a href={s.url} target="_blank" rel="noopener noreferrer nofollow" className="ml-0.5 text-indigo-600 hover:underline dark:text-indigo-400">
+                        [{s.id.slice(1)}]
+                      </a>
+                    )}
+                  </span>
+                );
+              })}
+            </div>
+          ))}
+          <div className="mt-1 text-[11px] text-zinc-500">These may be new or may simply not have been discussed earlier.</div>
+        </div>
+      )}
       <SourceList sources={sources} />
       <Details message={message} />
       {isLast && m.followUps && m.followUps.length > 0 && (

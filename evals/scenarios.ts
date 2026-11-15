@@ -440,6 +440,51 @@ export const scenarios: Scenario[] = [
     { expectError: "LLM_RATE_LIMIT" },
   ),
 
+  // Completeness (1): unchanged prices AND plans the earlier answer never mentioned.
+  agentScenario(
+    "C01",
+    "pricing",
+    "Earlier prices still correct, but the current lineup has plans the earlier answer didn't mention",
+    [
+      {
+        message: nov3Message,
+        script: {
+          ...nov3Script,
+          structured: {
+            ...nov3Script.structured,
+            evidence_extraction: evidenceResponder([
+              { domain: "github.com", subject: "GitHub Copilot", attribute: "Copilot Business", value: "$19 per user / month", quote: "Copilot Business $19 per user / month" },
+              { domain: "github.com", subject: "GitHub Copilot", attribute: "Copilot Enterprise", value: "$39 per user / month", quote: "Copilot Enterprise $39 per user / month" },
+              { domain: "github.com", subject: "GitHub Copilot", attribute: "Copilot Pro", value: "$10 per month", quote: "Copilot Pro $10 per month" },
+              { domain: "github.com", subject: "GitHub Copilot", attribute: "Copilot Pro+", value: "$39 per month", quote: "Copilot Pro+ $39 per month" },
+              { domain: "github.com", subject: "GitHub Copilot", attribute: "Copilot Max", value: "$100 per month", quote: "Copilot Max $100 per month" },
+            ]),
+          },
+        },
+        search: {
+          "copilot pricing": [
+            {
+              url: "https://github.com/features/copilot/plans",
+              title: "Plans for GitHub Copilot",
+              snippet: "Copilot Business $19 per user / month. Copilot Enterprise $39 per user / month. Copilot Pro $10 per month. Copilot Pro+ $39 per month. Copilot Max $100 per month.",
+            },
+          ],
+        },
+      },
+    ],
+    {
+      statuses: { "GitHub Copilot": "unchanged" },
+      custom: ({ result }) => {
+        const failures: string[] = [];
+        const cmp = (result?.metadata.comparisons ?? []).filter((c) => c.category === "pricing");
+        if (cmp.some((c) => c.status !== "unchanged" || c.historicalAccuracy !== "consistent")) failures.push("discussed prices should be unchanged and consistent");
+        const plans = (result?.metadata.offering ?? []).flatMap((o) => o.plansNotDiscussed.map((p) => p.plan));
+        if (JSON.stringify(plans) !== JSON.stringify(["Copilot Pro+", "Copilot Max"])) failures.push(`offering ${JSON.stringify(plans)} ≠ ["Copilot Pro+","Copilot Max"]`);
+        return failures;
+      },
+    },
+  ),
+
   // The three official challenge demos, end to end (3)
   agentScenario("D01", "pricing", "Official demo 1: CRM shortlist (pricing + product updates)", [{ message: crmMessage, script: crmScript, search: crmSearch }], {
     memoryStatus: "found",
@@ -453,12 +498,14 @@ export const scenarios: Scenario[] = [
       "HubSpot Sales Hub|product_update": "changed",
       "Salesforce Sales Cloud|product_update": "uncertain",
     },
-    maxSearches: 14,
+    maxSearches: 10,
     plantedFabrications: 2,
     custom: ({ result }) => {
-      // Every shortlisted vendor must have had an update-focused search (none "not checked").
+      // An update row may be "Not checked" only when the whole search budget was spent (pricing has priority),
+      // and it must say so instead of implying nothing shipped.
       const notChecked = (result?.metadata.comparisons ?? []).filter((c) => /Not checked/.test(c.explanation));
-      return notChecked.length ? [`update search missing for ${notChecked.map((c) => c.subject).join(", ")}`] : [];
+      const budgetSpent = (result?.metadata.stats?.searchCalls ?? 0) >= 10;
+      return notChecked.length && !budgetSpent ? [`update search skipped for ${notChecked.map((c) => c.subject).join(", ")} with budget left`] : [];
     },
   }),
   agentScenario("D02", "memory", "Official demo 2: '3 November' recall + still-correct check", [{ message: nov3Message, script: nov3Script, search: nov3Search }], {

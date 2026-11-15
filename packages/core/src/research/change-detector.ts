@@ -1,5 +1,6 @@
 import { normalizeForMatch, subjectMatches } from "../shared/text";
-import type { Comparison, ComparisonDimension, Evidence, HistoricalClaim, SourceKind } from "../shared/types";
+import type { Comparison, ComparisonDimension, Evidence, HistoricalClaim, OfferingNote, Source, SourceKind } from "../shared/types";
+import { textMentionsSubject } from "./evidence";
 import { parsePrice, type ParsedPrice } from "./price";
 
 /**
@@ -151,7 +152,17 @@ export function comparePricing(claims: HistoricalClaim[], evidence: Evidence[]):
     // Authority first; among equally authoritative sources prefer the one on comparable terms
     // (e.g. the flat plan price rather than a usage add-on listed for the same plan).
     const comparable = (e: Evidence) => (comparePrices(prev, parsePrice(e.value)).status === "not_comparable" ? 0 : 1);
-    const ranked = pickBest(samePlan).sort((a, b) => KIND_RANK[b.sourceKind] - KIND_RANK[a.sourceKind] || comparable(b) - comparable(a));
+    // Among equally authoritative sources, a price verified against the named plan outranks an
+    // unverified one (e.g. an FAQ stating "Launch plan … $0.106 per CU-hour" over an older blog
+    // post quoting a superseded rate with no plan attached). The gates themselves are unchanged.
+    const verified = (e: Evidence) => (e.planVerified === false ? 0 : 1);
+    // Ownership tier first (vendor-owned > news > third-party), then plan verification, then page type:
+    // a vendor's comparison page that ties "Pro … $39" to the plan beats its own pricing page whose
+    // card layout doesn't.
+    const tier = (e: Evidence) => (KIND_RANK[e.sourceKind] >= 3 ? 3 : KIND_RANK[e.sourceKind]);
+    const ranked = pickBest(samePlan).sort(
+      (a, b) => tier(b) - tier(a) || verified(b) - verified(a) || KIND_RANK[b.sourceKind] - KIND_RANK[a.sourceKind] || comparable(b) - comparable(a),
+    );
     const best = ranked[0]!;
     const bestParsed = parsePrice(best.value);
     const result = comparePrices(prev, bestParsed);
@@ -206,9 +217,26 @@ export function comparePricing(claims: HistoricalClaim[], evidence: Evidence[]):
     }
 
     // Historical cutoff: a page published before the conversation can't show a change *since* it.
+    // If that page is the vendor's own and the price is tied to the plan, it shows something else:
+    // the earlier answer was likely already out of date when it was given.
+    let historicalAccuracy: Comparison["historicalAccuracy"] = "unknown";
     if (status === "changed" && best.publishedAt && Date.parse(best.publishedAt) < Date.parse(claim.statedAt)) {
       status = "uncertain";
-      explanation = `The differing value comes from a page published ${best.publishedAt.slice(0, 10)}, before our conversation (${claim.statedAt.slice(0, 10)}), so it doesn't show a change since then.`;
+      if (isOfficial(best) && best.planVerified !== false) {
+        historicalAccuracy = "already_outdated";
+        explanation = `The vendor's own page, published ${best.publishedAt.slice(0, 10)} (before our conversation on ${claim.statedAt.slice(0, 10)}), already listed ${best.value}. The earlier answer was likely out of date when given, rather than the price changing since.`;
+      } else {
+        explanation = `The differing value comes from a page published ${best.publishedAt.slice(0, 10)}, before our conversation (${claim.statedAt.slice(0, 10)}), so it doesn't show a change since then.`;
+      }
+    }
+    // Plausibility: a >5× jump or <⅕ drop on identical terms is far more often a scraping artifact
+    // ("$2323" for a doubled "$23") than a real price change.
+    if (status === "changed" && dimension === "price_amount" && prev.amount && bestParsed.amount) {
+      const ratio = bestParsed.amount / prev.amount;
+      if (ratio > 5 || ratio < 0.2) {
+        status = "uncertain";
+        explanation = `The current value (${best.value}) differs from ${claim.value} by more than 5×, which is more likely a page-rendering artifact than a real change; not confirmed.`;
+      }
     }
     // Attribution: a price not tied to the named plan can't prove a change.
     if (status === "changed" && best.planVerified === false) {
@@ -226,17 +254,58 @@ export function comparePricing(claims: HistoricalClaim[], evidence: Evidence[]):
       explanation += " No official pricing page confirmed this; based on a third-party source.";
     }
     const used = [best, ...conflicting];
+    if (status === "unchanged") historicalAccuracy = "consistent";
     out.push({
       ...base,
       currentValue: best.value,
       status,
       dimension,
+      historicalAccuracy,
       explanation,
       evidenceIds: used.map((e) => e.id),
       sourceIds: [...new Set(used.map((e) => e.sourceId))],
     });
   }
   return out;
+}
+
+/**
+ * Completeness of the earlier answer: plans currently listed on vendor-owned pages (price tied to
+ * the plan) that none of the earlier claims discussed. This is reported separately from changes:
+ * a plan missing from the earlier answer may be new, or may simply have been left out.
+ */
+export function assessOffering(claims: HistoricalClaim[], evidence: Evidence[]): OfferingNote[] {
+  const subjects = [...new Set(claims.filter((c) => c.category === "pricing").map((c) => c.subject))];
+  const notes: OfferingNote[] = [];
+  for (const subject of subjects) {
+    const discussed = claims.filter((c) => subjectMatches(c.subject, subject) && c.category === "pricing");
+    const extra = new Map<string, { plan: string; value: string; sourceId: string }>();
+    for (const e of evidence) {
+      if (e.category !== "pricing" || !isOfficial(e) || e.planVerified !== true || !subjectMatches(e.subject, subject)) continue;
+      if (isGenericAttribute(e.attribute)) continue;
+      if (discussed.some((c) => planMatches(e.attribute, c.attribute, subject))) continue;
+      const key = normalizeForMatch(e.attribute);
+      if (!extra.has(key)) extra.set(key, { plan: e.attribute, value: e.value, sourceId: e.sourceId });
+    }
+    if (extra.size) notes.push({ subject, plansNotDiscussed: [...extra.values()].slice(0, 6) });
+  }
+  return notes;
+}
+
+/**
+ * Replaces the generic "no evidence" explanation with the actual reason, derived from the
+ * sources that were retrieved: vendor pages found but none stated a price for the plan
+ * (typically JavaScript-rendered or bot-blocked pricing pages) vs no vendor page found at all.
+ */
+export function explainMissingEvidence(comparisons: Comparison[], sources: Source[]): Comparison[] {
+  return comparisons.map((c) => {
+    if (c.category !== "pricing" || c.evidenceIds.length > 0 || c.dimension !== "evidence") return c;
+    const own = sources.filter((s) => (s.kind === "official_pricing" || s.kind === "official" || s.kind === "official_changelog") && textMentionsSubject(`${s.title} ${s.url}`, c.subject));
+    const explanation = own.length
+      ? `${own.length} page(s) on the vendor's own site were found (e.g. "${own[0]!.title.slice(0, 60)}"), but none stated a price for this plan in the retrievable text. The pricing page may render prices with JavaScript or block automated access, so this stays unverified.`
+      : "No page on the vendor's own site was found, and no other source stated a price for this plan, so this stays unverified.";
+    return { ...c, explanation };
+  });
 }
 
 export function compareProductUpdates(

@@ -79,3 +79,29 @@ Found by live testing during this round (all fixed, with tests): no official sou
 - Re-run `npm run eval:live` after the Groq daily quota resets: the final citation and grader fixes are verified offline only.
 - Retake the 3-November and Postgres screenshots (removed because they showed since-fixed citation glitches).
 - Your local `.env` still has `MAX_SEARCHES=6`. The new default is 14 (see `.env.example`).
+
+---
+
+## Round 3 (2026-11-15): final quality sprint
+
+| Priority | Finding (traced on real data) | Change | Files |
+|---|---|---|---|
+| 1 Neon | Comparator picked an unverified, superseded $0.14 blog quote over a plan-verified official FAQ ($0.106); undated tie → arbitrary order | plan-verified evidence ranks first among vendor-owned sources; regression test fails on `fff7739`. Same page under several URLs is merged, keeping all excerpts | `research/change-detector.ts`, `search/normalize.ts` |
+| 2 CRM | Freshsales card layout (price before plan); Zoho geo-served ₹ page and a "$2323" artifact; Pipedrive pricing page not retrievable | vendor-owned tier → plan-verified → page type ordering; >5× change treated as an artifact; "why no evidence" explanation from the retrieved sources | `change-detector.ts`, `agent/orchestrator.ts` |
+| 3 Completeness | Accuracy of earlier claims, change since, and omitted plans were conflated | `historicalAccuracy` per row; `offering` note (vendor-verified plans not in the earlier answer, "also offered now"); prompt + UI | `shared/types.ts`, `change-detector.ts`, `agent/context.ts`, `agent/prompts.ts`, `MessageItem.tsx` |
+| 4 Updates | Grader didn't validate launches | `updateChecks`: dated after baseline, official/news, names the product, no uncited launch claims; offering recall grading | `evals/grading.ts`, `evals/live-runner.ts` |
+| 5 Ground truth | Neon's transition predates the conversation; Zoho now verifiable via an official excerpt | `alsoCorrect` for Neon (still provisional), Zoho entry added, offering truths, per-entry method, `changeLog`, non-verifiable entries documented | `evals/ground-truth.json` |
+| 6 Performance | Search limit 14 had been raised without measurement; data shows no coverage gain | default back to 10; `npm run eval:perf` | `shared/config.ts`, `.env.example`, `evals/perf-report.ts` |
+| 6 Providers | Anthropic adapter never run live | validated: Haiku structured + stream, Opus structured with refusal-fallback params (~700 tokens); adapters exported | `packages/core/src/index.ts` |
+
+### Test log (end of round 3)
+
+- `npm ci` → `typecheck` (0 errors) → `lint` (clean) → `test` 168/168 → `eval` 54/54 → `build` OK (recorded in the final verification run)
+- CI on GitHub for `fff7739`: all 3 jobs green, including "offline evaluation report is up to date"
+- Live: not re-run this round (120b daily quota exhausted; `TAVILY_API_KEY` empty in `.env`)
+
+### Outstanding (needs a person)
+
+- Set `TAVILY_API_KEY` again and run `npm run eval:live` once Groq's 120b daily quota resets; then `npm run eval:perf`.
+- Confirm each `provisional` ground-truth entry by opening the official page.
+- Retake the 3-November and Postgres screenshots after a live run.

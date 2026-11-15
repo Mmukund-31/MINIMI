@@ -22,6 +22,7 @@
     "typecheck": "tsc -p tsconfig.json && tsc -p apps/web/tsconfig.json",
     "eval": "tsx evals/runner.ts",
     "eval:live": "tsx evals/live-runner.ts",
+    "eval:perf": "tsx evals/perf-report.ts",
     "seed:reset": "tsx packages/core/src/seed/reset-cli.ts"
   },
   "devDependencies": {

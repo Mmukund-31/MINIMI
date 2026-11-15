@@ -29,7 +29,7 @@ SSE events: `conversation`, `stage`, `memory`, `search`, `sources`, `comparison`
 | Budget | Default | Enforced by |
 |---|---|---|
 | LLM calls per message | 8 (one always reserved for the answer) | `UsageTracker`, `LLMClient.generateStructured` |
-| Searches per message | 14 | `finalizeSearchPlan`, `UsageTracker.beginSearch` |
+| Searches per message | 10 (14 measured: no coverage gain) | `finalizeSearchPlan`, `UsageTracker.beginSearch` |
 | Results per search / sources kept | 5 / 12 | Tavily request, `rankSources` |
 | Search timeout | 15 s | `AbortSignal.timeout` in the Tavily adapter |
 | LLM timeout | 90 s (+2 SDK retries) | SDK client options |
@@ -76,6 +76,12 @@ Each pricing row carries a `status` and a `dimension` ([shared/types.ts](../pack
 | `plan_availability` | the plan wasn't among the current plans seen | never automatically: reported as `uncertain` with the current plans listed |
 | `feature` | dated product launches after the conversation | major update published after the conversation |
 | `evidence` | no evidence, or equally authoritative sources disagree | never |
+
+**Evidence selection** for a row: vendor-owned before news before third-party, then plan-verified before unverified, then page type, then comparable terms, then recency. No gate depends on this order. Unverified attribution, pre-conversation publication and >5× jumps (likely scraping artifacts) all block "changed".
+
+**Completeness** is reported separately from change:
+- `historicalAccuracy`: `consistent`, `already_outdated` (a vendor page published before the conversation already showed a different value), or `unknown`.
+- `offering`: plans on vendor pages, tied to their prices, that the earlier answer didn't mention. The UI shows them as "Also offered now".
 
 ## Reliability
 

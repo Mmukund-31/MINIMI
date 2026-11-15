@@ -8,14 +8,21 @@
  *     verdicts, term compatibility of "changed" amounts, historical cutoff,
  *     citation validity, and quote-to-plan attribution.
  */
-import { parsePrice, planMatches, subjectMatches, type Comparison, type SourceRef } from "@minimi/core";
+import { parsePrice, planMatches, subjectMatches, type Comparison, type OfferingNote, type SourceRef } from "@minimi/core";
 
 export interface GroundTruthEntry {
   subject: string;
   plan: string;
   url: string;
   quote: string | null;
-  expected: { acceptable: Comparison["status"][]; dimension: Comparison["dimension"]; forbidden?: Comparison["status"][]; note?: string } | null;
+  expected: {
+    acceptable: Comparison["status"][];
+    dimension: Comparison["dimension"];
+    forbidden?: Comparison["status"][];
+    /** A second correct outcome, e.g. recognising the earlier answer was already out of date. */
+    alsoCorrect?: { status: Comparison["status"]; historicalAccuracy: NonNullable<Comparison["historicalAccuracy"]> };
+    note?: string;
+  } | null;
   review: string;
 }
 
@@ -54,6 +61,9 @@ export function gradeEntry(entry: GroundTruthEntry, comparisons: Comparison[]): 
   if (!row) return { ...base, grade: "missing", reason: "no comparison row for this subject and plan" };
   const exp = entry.expected;
   if (exp.forbidden?.includes(row.status)) return { ...base, got, grade: "wrong", reason: `status '${row.status}' is ruled out by ground truth` };
+  if (exp.alsoCorrect && row.status === exp.alsoCorrect.status && row.historicalAccuracy === exp.alsoCorrect.historicalAccuracy) {
+    return { ...base, got, grade: "correct", reason: `matches ground truth (${row.historicalAccuracy})` };
+  }
   if (exp.acceptable.includes(row.status)) {
     if (row.status === "changed" && row.dimension !== exp.dimension) {
       return { ...base, got, grade: "wrong", reason: `changed, but on dimension '${row.dimension}' (expected '${exp.dimension}')` };
@@ -66,9 +76,72 @@ export function gradeEntry(entry: GroundTruthEntry, comparisons: Comparison[]): 
   return { ...base, got, grade: "wrong", reason: `expected ${exp.acceptable.join("/")}, got confident '${row.status}'` };
 }
 
+/** Ground truth for completeness: current plans an earlier answer omitted. */
+export interface OfferingTruth {
+  subject: string;
+  plansExpected: string[];
+  url: string;
+  quote: string;
+  review: string;
+}
+
+export interface OfferingGrade {
+  subject: string;
+  found: string[];
+  missed: string[];
+  provisional: boolean;
+}
+
+/** Recall of omitted current plans (completeness). Missing ones are reported, not failed: coverage depends on search. */
+export function gradeOffering(t: OfferingTruth, notes: OfferingNote[]): OfferingGrade {
+  const listed = notes.filter((n) => subjectMatches(n.subject, t.subject)).flatMap((n) => n.plansNotDiscussed.map((p) => p.plan));
+  const found = t.plansExpected.filter((p) => listed.some((l) => planMatches(l, p, t.subject)));
+  return { subject: t.subject, found, missed: t.plansExpected.filter((p) => !found.includes(p)), provisional: t.review !== "human-confirmed" };
+}
+
 export interface StructuralViolation {
-  check: "authority" | "compatibility" | "cutoff" | "citation";
+  check: "authority" | "compatibility" | "cutoff" | "citation" | "update-date" | "update-authority" | "update-attribution" | "unsupported-launch";
   detail: string;
+}
+
+const LAUNCH_VERB = /\b(launched|launches|released|releases|introduced|introduces|announced|announces|shipped|ships|rolled out|unveiled|debuted)\b/i;
+
+/**
+ * Product-update checks. Every "changed" feature row must cite a source that names the
+ * product, is the vendor's own page or reputable news, and is dated after the conversation.
+ * Answer sentences that claim a launch for a product with no such row, and cite nothing,
+ * are flagged as unsupported.
+ */
+export function updateChecks(input: { comparisons: Comparison[]; sources: SourceRef[]; baselineDate?: string; answer: string }): StructuralViolation[] {
+  const out: StructuralViolation[] = [];
+  const byId = new Map(input.sources.map((s) => [s.id, s]));
+  const features = input.comparisons.filter((c) => c.category === "product_update");
+  for (const c of features.filter((x) => x.status === "changed")) {
+    const srcs = c.sourceIds.map((id) => byId.get(id)).filter((s): s is SourceRef => Boolean(s));
+    if (!srcs.some((s) => s.publishedAt && (!input.baselineDate || Date.parse(s.publishedAt) >= Date.parse(input.baselineDate)))) {
+      out.push({ check: "update-date", detail: `${c.subject}: update reported as changed without a source dated after the conversation` });
+    }
+    if (!srcs.some((s) => s.kind !== "third_party")) {
+      out.push({ check: "update-authority", detail: `${c.subject}: update rests only on third-party sources` });
+    }
+    const name = c.subject.toLowerCase().split(/[^a-z0-9]+/).find((t) => t.length >= 3) ?? "";
+    if (name && !srcs.some((s) => `${s.title} ${s.url}`.toLowerCase().includes(name))) {
+      out.push({ check: "update-attribution", detail: `${c.subject}: cited update source doesn't name the product` });
+    }
+  }
+  // Unsupported launch claims in the answer text.
+  const confirmed = new Set(features.filter((c) => c.status === "changed").map((c) => c.subject));
+  const subjects = [...new Set(input.comparisons.map((c) => c.subject))];
+  for (const sentence of input.answer.split(/(?<=[.!?])\s+|\n+/)) {
+    if (!LAUNCH_VERB.test(sentence) || /\[S\d+\]/.test(sentence) || /\b(no|not|none|nothing|without)\b/i.test(sentence)) continue;
+    for (const subject of subjects) {
+      const name = subject.toLowerCase().split(/[^a-z0-9]+/).find((t) => t.length >= 3);
+      if (name && sentence.toLowerCase().includes(name) && !confirmed.has(subject)) {
+        out.push({ check: "unsupported-launch", detail: `answer claims a launch for ${subject} without a cited, dated update: "${sentence.slice(0, 120)}"` });
+      }
+    }
+  }
+  return out;
 }
 
 /** Checks every pricing verdict without needing ground truth. */

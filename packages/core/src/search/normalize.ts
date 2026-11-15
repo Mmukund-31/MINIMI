@@ -90,5 +90,38 @@ export function dedupeResults(results: SearchResult[]): SearchResult[] {
       publishedAt: better.publishedAt ?? other.publishedAt,
     });
   }
-  return [...byUrl.values()];
+  return mergeSamePage([...byUrl.values()]);
+}
+
+/** Owner label of a host: "neon" for neon.tech and neon.com (mirrors/redirect wrappers of one page). */
+function ownerLabel(domain: string): string {
+  const labels = domain.split(".");
+  return labels.length >= 2 ? labels[labels.length - 2]! : domain;
+}
+
+/**
+ * The same page often arrives under several URLs (canonical, redirect wrapper with
+ * tracking params, old domain) with *different* excerpts. Merge results with the same
+ * owner and title, joining their distinct verbatim chunks so no evidence is lost and
+ * the page uses one source slot instead of several.
+ */
+export function mergeSamePage(results: SearchResult[]): SearchResult[] {
+  const groups = new Map<string, SearchResult[]>();
+  for (const r of results) {
+    const title = r.title.toLowerCase().replace(/\s+/g, " ").trim();
+    const key = title.length >= 12 ? `${ownerLabel(r.sourceDomain)}|${title}` : `url|${r.url}`;
+    groups.set(key, [...(groups.get(key) ?? []), r]);
+  }
+  return [...groups.values()].map((g) => {
+    if (g.length === 1) return g[0]!;
+    const best = [...g].sort((a, b) => (b.providerScore ?? 0) - (a.providerScore ?? 0) || a.url.length - b.url.length)[0]!;
+    const chunks: string[] = [];
+    for (const r of g) for (const t of [r.snippet, r.content ?? ""]) if (t && !chunks.some((c) => c.includes(t))) chunks.push(t);
+    return {
+      ...best,
+      snippet: best.snippet,
+      content: chunks.join("\n…\n").slice(0, 8_000),
+      publishedAt: g.map((r) => r.publishedAt).find(Boolean),
+    };
+  });
 }

@@ -1,61 +1,86 @@
 {
-  "description": "Ground truth for grading live-eval verdicts against the seeded baselines. Each entry states what the vendor's own pricing page said, quoted verbatim. 'review' must be changed to 'human-confirmed' by a person who opened the page; until then results are reported as PROVISIONAL. Entries whose price was not visible in the page text have no 'expected' and are not graded (never guess).",
+  "description": "Ground truth for grading live-eval verdicts against the seeded baselines. Each entry quotes the vendor's own page. 'review' must be changed to 'human-confirmed' by a person who opened the page; until then grades are reported as PROVISIONAL. Entries whose price was not visible have no 'expected' and are not graded (never guess). Expectations are only changed when new official evidence justifies it, never to make the system pass; every such change is logged in 'changeLog'.",
   "fetchedAt": "2026-11-15",
-  "fetchMethod": "automated fetch of the official page text; prices rendered only by JavaScript are not visible to this method",
+  "methods": {
+    "page-fetch": "automated fetch of the official page text (no JavaScript rendering)",
+    "official-domain-search": "official-domain search excerpt (Tavily include_domains), independent of the system's LLM extraction"
+  },
   "cases": {
     "demo-postgres": [
       {
-        "subject": "Supabase", "plan": "Pro", "url": "https://supabase.com/pricing",
+        "subject": "Supabase", "plan": "Pro", "url": "https://supabase.com/pricing", "method": "page-fetch",
         "quote": "Pro - from $25/month",
         "expected": { "acceptable": ["unchanged"], "dimension": "price_amount" },
         "review": "provisional"
       },
       {
-        "subject": "Railway", "plan": "Hobby", "url": "https://railway.com/pricing",
+        "subject": "Railway", "plan": "Hobby", "url": "https://railway.com/pricing", "method": "page-fetch",
         "quote": "Hobby — $5/month, including $5 of monthly usage credits.",
         "expected": { "acceptable": ["unchanged"], "dimension": "price_amount" },
         "review": "provisional"
       },
       {
-        "subject": "Neon", "plan": "Launch", "url": "https://neon.com/pricing",
+        "subject": "Neon", "plan": "Launch", "url": "https://neon.com/pricing", "method": "page-fetch",
         "quote": "Pay only for what you use on paid plans; no monthly minimum and no per-project fee. ... $0.106/CU-hour",
-        "expected": { "acceptable": ["changed"], "dimension": "pricing_model", "note": "Flat $19/month (seed) → usage-based. An honest 'uncertain' or 'not_comparable' is an abstention, not an error." },
+        "expected": {
+          "acceptable": ["changed"], "dimension": "pricing_model",
+          "alsoCorrect": { "status": "uncertain", "historicalAccuracy": "already_outdated" },
+          "note": "Flat $19/month (seed) vs usage-based now. Neon's dated changelog (https://neon.com/docs/changelog/2025-11-07: 'Launch plan: Now $0.106 per CU-hour (previously $0.14)') shows the model was already usage-based before the conversation, so flagging the earlier answer as already out of date is also correct. A confident 'unchanged' is wrong."
+        },
         "review": "provisional"
       },
-      { "subject": "Render", "plan": "Basic-1gb", "url": "https://render.com/pricing", "quote": null, "expected": null, "review": "not visible in fetched text" },
-      { "subject": "AWS RDS for PostgreSQL", "plan": "db.t4g.micro", "url": "https://aws.amazon.com/rds/postgresql/pricing/", "quote": null, "expected": null, "review": "not fetched" }
+      { "subject": "Render", "plan": "Basic-1gb", "url": "https://render.com/pricing", "quote": null, "expected": null, "review": "not verifiable: Postgres instance prices are not in the fetched page text (JavaScript-rendered)" },
+      { "subject": "AWS RDS for PostgreSQL", "plan": "db.t4g.micro", "url": "https://aws.amazon.com/rds/postgresql/pricing/", "quote": null, "expected": null, "review": "not verifiable: regional instance price tables are JavaScript-rendered; not fetched" }
     ],
     "demo-nov3": [
       {
-        "subject": "GitHub Copilot", "plan": "Pro", "url": "https://github.com/features/copilot/plans",
+        "subject": "GitHub Copilot", "plan": "Pro", "url": "https://github.com/features/copilot/plans", "method": "page-fetch",
         "quote": "$10USDper user / month",
         "expected": { "acceptable": ["unchanged"], "dimension": "price_amount" },
         "review": "provisional"
       },
-      { "subject": "GitHub Copilot", "plan": "Business", "url": "https://github.com/features/copilot/plans", "quote": null, "expected": null, "review": "not visible in fetched text" },
-      { "subject": "GitHub Copilot", "plan": "Enterprise", "url": "https://github.com/features/copilot/plans", "quote": "Contact sales", "expected": null, "review": "page shows 'Contact sales' only" }
+      { "subject": "GitHub Copilot", "plan": "Business", "url": "https://github.com/features/copilot/plans", "quote": null, "expected": null, "review": "not verifiable independently: price not in fetched page text. The system's own evidence (docs.github.com) is not used as ground truth to avoid circular grading." },
+      { "subject": "GitHub Copilot", "plan": "Enterprise", "url": "https://github.com/features/copilot/plans", "quote": "Contact sales", "expected": null, "review": "not verifiable independently: page shows 'Contact sales' only" }
     ],
     "demo-crm": [
       {
-        "subject": "Freshsales", "plan": "Pro", "url": "https://www.freshworks.com/crm/pricing/",
+        "subject": "Freshsales", "plan": "Pro", "url": "https://www.freshworks.com/crm/pricing/", "method": "page-fetch",
         "quote": "$39/user/month, billed annually",
         "expected": { "acceptable": ["unchanged"], "dimension": "price_amount" },
         "review": "provisional"
       },
       {
-        "subject": "HubSpot Sales Hub", "plan": "Professional", "url": "https://www.hubspot.com/pricing/sales",
+        "subject": "HubSpot Sales Hub", "plan": "Professional", "url": "https://www.hubspot.com/pricing/sales", "method": "page-fetch",
         "quote": "Professional … Starts at $90/mo/seat $100/mo/seat Billing period Pay Monthly Commit annually Pay Annually",
         "expected": { "acceptable": ["unchanged", "uncertain"], "dimension": "price_amount", "note": "Page shows $90 (annual commitment, inferred) and $100 (monthly). Seed: $90 billed annually. 'uncertain' is acceptable because the page layout doesn't explicitly bind each number to a billing option." },
         "review": "provisional"
       },
       {
-        "subject": "Salesforce Sales Cloud", "plan": "Enterprise", "url": "https://www.salesforce.com/sales/pricing/",
+        "subject": "Salesforce Sales Cloud", "plan": "Enterprise", "url": "https://www.salesforce.com/sales/pricing/", "method": "page-fetch",
         "quote": "Core $ 195 USD/User/Month (Billed annually) ... Advanced $ 395 ... Max $ 550 (no edition named 'Enterprise')",
         "expected": { "acceptable": ["uncertain", "changed"], "dimension": "plan_availability", "forbidden": ["unchanged"], "note": "The Enterprise edition no longer appears; a price verdict on 'Enterprise' would be wrong." },
         "review": "provisional"
       },
-      { "subject": "Zoho CRM", "plan": "Professional", "url": "https://www.zoho.com/crm/zohocrm-pricing.html", "quote": null, "expected": null, "review": "price digits not visible in fetched text" },
-      { "subject": "Pipedrive", "plan": "Professional", "url": "https://www.pipedrive.com/en/pricing", "quote": null, "expected": null, "review": "fetch blocked (HTTP 403)" }
+      {
+        "subject": "Zoho CRM", "plan": "Professional", "url": "https://www.zoho.com/crm/zohocrm-pricing-calculator.html", "method": "official-domain-search",
+        "quote": "Professional US$23 ... /user/month",
+        "expected": { "acceptable": ["unchanged"], "dimension": "price_amount", "note": "Zoho's main pricing page is geo-served (₹1,400/user/month seen); a currency 'not_comparable' is an honest abstention, not an error." },
+        "review": "provisional"
+      },
+      { "subject": "Pipedrive", "plan": "Professional", "url": "https://www.pipedrive.com/en/pricing", "quote": null, "expected": null, "review": "not verifiable: pricing page blocks automated fetches (HTTP 403); official-domain search returned no plan prices" }
     ]
-  }
+  },
+  "offering": {
+    "demo-nov3": [
+      { "subject": "GitHub Copilot", "plansExpected": ["Pro+", "Max"], "url": "https://github.com/features/copilot/plans", "quote": "Pro+ … $39USDper user / month … Max … $100USDper user / month", "review": "provisional" }
+    ],
+    "demo-crm": [
+      { "subject": "Salesforce Sales Cloud", "plansExpected": ["Core", "Advanced", "Max"], "url": "https://www.salesforce.com/sales/pricing/", "quote": "Core $ 195 USD/User/Month (Billed annually) ... Advanced $ 395 ... Max $ 550", "review": "provisional" }
+    ]
+  },
+  "changeLog": [
+    { "date": "2026-11-15", "entry": "Neon Launch", "change": "added alsoCorrect {uncertain, already_outdated}; 'changed/pricing_model' still acceptable", "why": "official dated changelog shows the transition predates the seeded conversation" },
+    { "date": "2026-11-15", "entry": "Zoho CRM Professional", "change": "added expectation (was ungraded)", "why": "official-domain search excerpt from zoho.com pricing calculator states the Professional price" },
+    { "date": "2026-11-15", "entry": "offering (Copilot, Salesforce)", "change": "added completeness ground truth", "why": "plans listed on the official pages but not in the seeded answers" }
+  ]
 }

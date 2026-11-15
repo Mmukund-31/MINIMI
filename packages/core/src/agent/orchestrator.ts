@@ -3,7 +3,7 @@ import type { Repositories, SearchRecordInput } from "../db/repositories";
 import type { LLMClient } from "../llm/client";
 import { UsageTracker } from "../llm/usage";
 import { MemoryRetriever, type MemoryResult } from "../memory/retrieval";
-import { compareProductUpdates, comparePricing } from "../research/change-detector";
+import { assessOffering, compareProductUpdates, comparePricing, explainMissingEvidence } from "../research/change-detector";
 import { screenSources, validateEvidence, verifyHistoricalClaims } from "../research/evidence";
 import { AnalysisSchema, EvidenceExtractionSchema, PlanSchema, type Analysis, type Plan } from "../research/schemas";
 import type { CachedSearch } from "../search/cached";
@@ -17,6 +17,7 @@ import { subjectMatches, truncate } from "../shared/text";
 import type {
   AgentEvent,
   Comparison,
+  OfferingNote,
   Conversation,
   Evidence,
   ExecutionStats,
@@ -89,6 +90,7 @@ interface ExecutionState {
   searchRecords: SearchRecordInput[];
   evidence: Evidence[];
   comparisons: Comparison[];
+  offering: OfferingNote[];
   /** Answer text streamed so far (kept if the run fails mid-answer). */
   partial: string;
   /** Client disconnect + execution deadline. Checked between stages. */
@@ -177,6 +179,7 @@ export class AgentOrchestrator {
       searchRecords: [],
       evidence: [],
       comparisons: [],
+      offering: [],
       partial: "",
       signal,
     };
@@ -290,6 +293,7 @@ export class AgentOrchestrator {
           status: "complete",
           sources: sourceRefs,
           comparisons: state.comparisons,
+          offering: state.offering,
           memory: state.memory?.summary ?? { status: "not_requested", conversationIds: [], messageIds: [] },
           notes: state.notes,
           followUps: followUpSuggestions({
@@ -549,7 +553,7 @@ export class AgentOrchestrator {
 
     // compare (deterministic)
     await this.stage(state, "compare", emit, async () => {
-      const pricing = comparePricing(state.claims, state.evidence);
+      const pricing = explainMissingEvidence(comparePricing(state.claims, state.evidence), state.sources);
       const subjectNames = plan.subjects.map((s) => s.name);
       // Product-update rows only when the user asked about launches/updates or whether an answer is
       // still correct (deterministic gate), and "not checked" when no update search actually ran.
@@ -559,6 +563,7 @@ export class AgentOrchestrator {
           ? compareProductUpdates(subjectNames, state.evidence, state.memory?.summary.baselineDate, updateSearchedSubjects(plan.searches, executed))
           : [];
       state.comparisons = [...pricing, ...updates];
+      state.offering = assessOffering(state.claims, state.evidence);
       if (state.comparisons.length) emit({ type: "comparison", comparisons: state.comparisons });
       const counts = state.comparisons.reduce<Record<string, number>>((acc, c) => ((acc[c.status] = (acc[c.status] ?? 0) + 1), acc), {});
       return Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(", ") || "nothing to compare";
@@ -583,6 +588,7 @@ export class AgentOrchestrator {
       memory: state.memory,
       memoryRequested: state.analysis.needsMemory,
       comparisons: state.comparisons,
+      offering: state.offering,
       evidence: state.evidence,
       sources: state.sources,
       notes: state.notes,
@@ -625,7 +631,7 @@ export class AgentOrchestrator {
     const citedIds = new Set([...content.matchAll(/\[(S\d+)\]/g)].map((m) => m[1]!));
     // Sources list: cited ones first, then the others that informed comparisons.
     const cited = state.sources.filter((s) => citedIds.has(s.id));
-    const compared = new Set(state.comparisons.flatMap((c) => c.sourceIds));
+    const compared = new Set([...state.comparisons.flatMap((c) => c.sourceIds), ...state.offering.flatMap((o) => o.plansNotDiscussed.map((p) => p.sourceId))]);
     const rest = state.sources.filter((s) => !citedIds.has(s.id) && compared.has(s.id));
     return { content, usedSources: [...cited, ...rest] };
   }

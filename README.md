@@ -64,20 +64,22 @@ evals/          offline scenarios, live runner, grading, ground truth, reports
 
 ## Key technical decisions
 
-- **One orchestrated pipeline, not an agent loop.** Bounded cost (≤ 8 LLM calls, ≤ 14 searches per message) and deterministic tests.
+- **One orchestrated pipeline, not an agent loop.** Bounded cost (≤ 8 LLM calls, ≤ 10 searches per message) and deterministic tests.
 - **The model reads; code decides.** Extracted facts need a verbatim quote found in the source, a source that names the vendor, and a price tied to the named plan. Verdicts are computed by a tested price parser and comparator, never by the model.
 - **Official sources first.** Pricing searches target the vendor's domain (Tavily `include_domains`). If those pages show no visible prices, or budget remains, an open search runs too. Third-party verdicts are labeled as such.
 - **Honest uncertainty.** No evidence, conflicting sources, stale pages, pages published before the conversation, or prices not tied to the plan all yield "uncertain". "Not comparable" never means "unchanged".
 - **No native dependencies.** Built-in `node:sqlite` (FTS5) instead of better-sqlite3: unsigned native binaries were blocked on the development machine.
-- **Free-tier aware.** Groq quotas are per model, so roles are split across two models, with escalation (planning) and fallback (extraction on rate limit).
+- **Free-tier aware.** Groq quotas are per model, so roles are split across two models, with escalation (planning) and fallback (extraction on rate limit). The Anthropic adapter is validated against the real API (structured output and streaming).
+- **Three separate questions.** Was the earlier claim right when made (`historicalAccuracy`), has it changed since (status + dimension), and is the earlier answer incomplete (plans on vendor pages it never mentioned, shown as "also offered now", never called new without a dated source).
 
 ## Testing and evaluation
 
 | Command | What it checks | Last result |
 |---|---|---|
-| `npm test` | 152 unit + integration tests (Fastify inject, deterministic doubles, no network) | 152/152 |
-| `npm run eval` | 53 deterministic scenarios: dates, memory, research, pricing, updates, multi-turn, uncertainty, adversarial, the 3 demos. Report: [evals/REPORT.md](evals/REPORT.md) | 53/53 |
-| `npm run eval:live` | the 3 demos + 2 controls against real Groq + Tavily. Structural checks plus grading against [human-reviewable ground truth](evals/ground-truth.json). Report: [evals/LIVE_REPORT.md](evals/LIVE_REPORT.md) | see [docs/evaluation.md](docs/evaluation.md) |
+| `npm test` | 168 unit + integration tests (Fastify inject, deterministic doubles, no network) | 168/168 |
+| `npm run eval` | 54 deterministic scenarios: dates, memory, research, pricing, completeness, updates, multi-turn, uncertainty, adversarial, the 3 demos. Report: [evals/REPORT.md](evals/REPORT.md) | 54/54 |
+| `npm run eval:live` | the 3 demos + 2 controls against real Groq + Tavily. Structural + product-update checks, completeness grading, and verdict grading against [human-reviewable ground truth](evals/ground-truth.json). Report: [evals/LIVE_REPORT.md](evals/LIVE_REPORT.md) | see [docs/evaluation.md](docs/evaluation.md) |
+| `npm run eval:perf` | searches, LLM calls, tokens and per-stage latency computed from saved live runs (no API calls) | see [docs/evaluation.md](docs/evaluation.md) |
 | `npm run lint` · `npm run typecheck` · `npm run build` | ESLint, strict tsc, production build | clean |
 
 CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs a clean `npm ci`, typecheck, lint, tests, offline evaluation and build on Ubuntu (Node 22 and 24) and Windows (Node 24).

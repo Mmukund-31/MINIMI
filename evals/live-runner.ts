@@ -15,10 +15,10 @@ import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRuntime, loadConfig, loadDotEnv, missingCredentials, type AgentEvent, type Comparison, type Logger, type Message } from "@minimi/core";
-import { gradeEntry, rowMentionsEntity, structuralChecks, summarizeGrades, type GradedEntry, type GroundTruthEntry } from "./grading";
+import { gradeEntry, gradeOffering, rowMentionsEntity, structuralChecks, summarizeGrades, updateChecks, type GradedEntry, type GroundTruthEntry, type OfferingGrade, type OfferingTruth } from "./grading";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const groundTruth = JSON.parse(readFileSync(join(here, "ground-truth.json"), "utf8")) as { fetchedAt: string; cases: Record<string, GroundTruthEntry[]> };
+const groundTruth = JSON.parse(readFileSync(join(here, "ground-truth.json"), "utf8")) as { fetchedAt: string; cases: Record<string, GroundTruthEntry[]>; offering?: Record<string, OfferingTruth[]> };
 // Groq counts requested max_tokens against the per-minute limit; consecutive research cases need a pause.
 const PAUSE_MS = Number(process.env.LIVE_EVAL_PAUSE_MS ?? 20_000);
 
@@ -127,13 +127,18 @@ async function main() {
     const comparisons = meta?.comparisons ?? [];
     const truth = groundTruth.cases[c.id] ?? [];
     const graded = truth.map((e) => gradeEntry(e, comparisons));
-    const violations = structuralChecks({
-      comparisons,
-      sources: sourcesEvt?.sources ?? [],
-      baselineDate: meta?.memory?.baselineDate,
-      answer: message?.content ?? "",
-      retrievedSourceIds: allSourceIds,
-    });
+    const violations = [
+      ...structuralChecks({
+        comparisons,
+        sources: sourcesEvt?.sources ?? [],
+        baselineDate: meta?.memory?.baselineDate,
+        answer: message?.content ?? "",
+        retrievedSourceIds: allSourceIds,
+      }),
+      ...updateChecks({ comparisons, sources: sourcesEvt?.sources ?? [], baselineDate: meta?.memory?.baselineDate, answer: message?.content ?? "" }),
+    ];
+    const offering = meta?.offering ?? [];
+    const offeringGrades = (groundTruth.offering?.[c.id] ?? []).map((o) => gradeOffering(o, offering));
     const evRows = message ? runtime.repos.research.evidenceForMessage(message.id) : [];
     const pricingEv = evRows.map((r) => JSON.parse(String(r.metadata)) as { category?: string; planVerified?: boolean }).filter((m) => m.category === "pricing");
 
@@ -156,6 +161,8 @@ async function main() {
       gradeSummary: summarizeGrades(graded),
       violations,
       planAttribution: { verified: pricingEv.filter((m) => m.planVerified).length, total: pricingEv.length },
+      offering,
+      offeringGrades,
       error,
       latencyMs: ms,
       llmCalls: meta?.stats?.llmCalls,
@@ -222,6 +229,14 @@ function renderReport(stamp: string, llm: { provider: string; models: string[] }
     if (graded.length) {
       lines.push("", "| Ground truth | Grade | System said | Why |", "|---|---|---|---|");
       for (const g of graded) lines.push(`| ${g.subject} · ${g.plan} | ${g.grade} | ${g.got ? `${g.got.status} (${g.got.dimension})` : "–"} | ${g.reason} |`);
+      lines.push("");
+    }
+    const og = (r.offeringGrades ?? []) as OfferingGrade[];
+    const offeringNotes = (r.offering ?? []) as Array<{ subject: string; plansNotDiscussed: Array<{ plan: string; value: string }> }>;
+    if (og.length || offeringNotes.length) {
+      lines.push("**Completeness (current plans not in the earlier answer):**", "");
+      for (const n of offeringNotes) lines.push(`- System listed for ${n.subject}: ${n.plansNotDiscussed.map((p) => `${p.plan} (${p.value})`).join("; ")}`);
+      for (const g of og) lines.push(`- Ground truth${g.provisional ? " (provisional)" : ""} for ${g.subject}: found ${g.found.join(", ") || "none"}${g.missed.length ? `; missed ${g.missed.join(", ")}` : ""}`);
       lines.push("");
     }
     const mem = r.memory as { status?: string; titles: string[]; interpretation?: string };

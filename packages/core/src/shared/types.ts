@@ -35,6 +35,8 @@ export interface MessageMetadata {
   status?: "complete" | "error";
   sources?: SourceRef[];
   comparisons?: Comparison[];
+  /** Current plans seen on vendor pages that the earlier answer did not mention (completeness, not change). */
+  offering?: OfferingNote[];
   memory?: MemorySummary;
   notes?: string[];
   followUps?: string[];
@@ -143,10 +145,23 @@ export interface Comparison {
   currentValue?: string;
   status: ChangeStatus;
   dimension: ComparisonDimension;
+  /**
+   * Was the earlier claim right *when it was made*? Distinct from "changed since":
+   *  consistent       current evidence matches the claim
+   *  already_outdated an official page published before the conversation already showed a different value
+   *  unknown          not determinable from the evidence
+   */
+  historicalAccuracy?: "consistent" | "already_outdated" | "unknown";
   explanation: string;
   /** Evidence ids supporting the current value. */
   evidenceIds: string[];
   sourceIds: string[];
+}
+
+/** Completeness of an earlier answer: plans offered now that it didn't discuss. Not a claim that they are new. */
+export interface OfferingNote {
+  subject: string;
+  plansNotDiscussed: Array<{ plan: string; value: string; sourceId: string }>;
 }
 
 // ── Memory ───────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Comparison } from "@minimi/core";
-import { gradeEntry, structuralChecks, summarizeGrades, type GroundTruthEntry } from "../../evals/grading";
+import { gradeEntry, gradeOffering, structuralChecks, summarizeGrades, updateChecks, type GroundTruthEntry } from "../../evals/grading";
 
 const row = (subject: string, attribute: string, status: Comparison["status"], dimension: Comparison["dimension"], extra: Partial<Comparison> = {}): Comparison => ({
   subject,
@@ -26,6 +26,12 @@ describe("gradeEntry", () => {
   it("distinguishes honest abstention from a confident wrong answer", () => {
     expect(gradeEntry(entry(exp), [row("Neon", "Launch", "uncertain", "pricing_model")]).grade).toBe("abstained");
     expect(gradeEntry(entry(exp), [row("Neon", "Launch", "unchanged", "price_amount")]).grade).toBe("wrong");
+  });
+  it("accepts the documented alternative outcome only with its historical-accuracy finding", () => {
+    const alt = { ...exp, alsoCorrect: { status: "uncertain" as const, historicalAccuracy: "already_outdated" as const } };
+    expect(gradeEntry(entry(alt), [row("Neon", "Launch", "uncertain", "pricing_model", { historicalAccuracy: "already_outdated" })]).grade).toBe("correct");
+    expect(gradeEntry(entry(alt), [row("Neon", "Launch", "uncertain", "pricing_model", { historicalAccuracy: "unknown" })]).grade).toBe("abstained");
+    expect(gradeEntry(entry(alt), [row("Neon", "Launch", "unchanged", "price_amount")]).grade).toBe("wrong");
   });
   it("respects forbidden statuses, missing rows and unreviewed entries", () => {
     const f = { acceptable: ["uncertain" as const], dimension: "plan_availability" as const, forbidden: ["unchanged" as const] };
@@ -60,6 +66,46 @@ describe("structuralChecks", () => {
   });
   it("passes clean, well-sourced verdicts", () => {
     expect(structuralChecks({ ...base, answer: "[S1]", comparisons: [row("A", "Pro", "changed", "price_amount", { sourceIds: ["S1"], previousValue: "$20/month", currentValue: "$25/month" })] })).toEqual([]);
+  });
+});
+
+describe("gradeOffering", () => {
+  it("measures recall of omitted current plans", () => {
+    const g = gradeOffering(
+      { subject: "GitHub Copilot", plansExpected: ["Pro+", "Max"], url: "u", quote: "q", review: "provisional" },
+      [{ subject: "GitHub Copilot", plansNotDiscussed: [{ plan: "Copilot Pro+", value: "$39", sourceId: "S1" }] }],
+    );
+    expect(g).toMatchObject({ found: ["Pro+"], missed: ["Max"], provisional: true });
+  });
+});
+
+describe("updateChecks", () => {
+  const upd = (subject: string, sourceIds: string[], status: Comparison["status"] = "changed"): Comparison => ({
+    subject, category: "product_update", attribute: "Major update", status, dimension: "feature", explanation: "", evidenceIds: [], sourceIds, currentValue: "x",
+  });
+  const sources = [
+    { id: "S1", title: "HubSpot launches Breeze agents", url: "https://hubspot.com/news/breeze", domain: "hubspot.com", retrievedAt: "x", kind: "official_changelog" as const, publishedAt: "2026-11-12T00:00:00Z" },
+    { id: "S2", title: "CRM roundup", url: "https://blog.example.com/crm", domain: "blog.example.com", retrievedAt: "x", kind: "third_party" as const, publishedAt: "2026-11-12T00:00:00Z" },
+    { id: "S3", title: "Salesforce Agentforce 2", url: "https://techcrunch.com/sf", domain: "techcrunch.com", retrievedAt: "x", kind: "news" as const, publishedAt: "2025-09-18T00:00:00Z" },
+    { id: "S4", title: "Zoho update", url: "https://zoho.com/news", domain: "zoho.com", retrievedAt: "x", kind: "official_changelog" as const },
+  ];
+  const base = { sources, baselineDate: "2026-11-09T10:00:00Z", answer: "" };
+  it("accepts a dated, official, correctly attributed update", () => {
+    expect(updateChecks({ ...base, comparisons: [upd("HubSpot Sales Hub", ["S1"])] })).toEqual([]);
+  });
+  it("flags pre-baseline or undated dates, third-party-only and misattributed updates", () => {
+    const v = updateChecks({ ...base, comparisons: [upd("Salesforce Sales Cloud", ["S3"]), upd("Zoho CRM", ["S4"]), upd("Pipedrive", ["S2"])] });
+    const checks = v.map((x) => `${x.check}:${x.detail.split(":")[0]}`);
+    expect(checks).toContain("update-date:Salesforce Sales Cloud");
+    expect(checks).toContain("update-date:Zoho CRM");
+    expect(checks).toContain("update-authority:Pipedrive");
+    expect(checks).toContain("update-attribution:Pipedrive");
+  });
+  it("flags uncited launch claims for products without a confirmed update", () => {
+    const comparisons = [upd("HubSpot Sales Hub", ["S1"]), upd("Pipedrive", [], "uncertain")];
+    const v = updateChecks({ ...base, comparisons, answer: "HubSpot launched Breeze agents [S1]. Pipedrive released an AI assistant. Zoho shipped nothing big." });
+    expect(v.map((x) => x.check)).toEqual(["unsupported-launch"]);
+    expect(v[0]!.detail).toMatch(/Pipedrive/);
   });
 });
 

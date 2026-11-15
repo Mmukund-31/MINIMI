@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  assessOffering,
   comparePricing,
+  explainMissingEvidence,
   focusedExcerpt,
   isOfficialDomain,
   planAttributionVerified,
@@ -131,6 +133,46 @@ describe("evidence: entity and plan attribution", () => {
   });
 });
 
+describe("completeness: historical accuracy and offering", () => {
+  let k = 0;
+  const e = (attribute: string, value: string, extra: Partial<Evidence> = {}): Evidence => ({
+    id: `x${++k}`, claim: "", subject: "GitHub Copilot", category: "pricing", attribute, value, quote: value, sourceId: `S${k}`,
+    sourceUrl: "https://github.com/features/copilot/plans", sourceTitle: "Plans", sourceKind: "official_pricing",
+    retrievedAt: "2026-11-15T00:00:00Z", evidenceType: "current", strength: "strong", planVerified: true, ...extra,
+  });
+  const c = (attribute: string, value: string) => ({ subject: "GitHub Copilot", category: "pricing" as const, attribute, value, messageId: "m", statedAt: "2026-11-03T09:00:00Z" });
+
+  it("lists verified current plans the earlier answer didn't discuss, separately from changes", () => {
+    const claims = [c("Copilot Pro", "$10 per month"), c("Copilot Business", "$19 per user/month")];
+    const evidence = [e("Copilot Pro", "$10 per month"), e("Copilot Business", "$19 per user/month"), e("Copilot Pro+", "$39 per month"), e("Copilot Max", "$100 per month"), e("Copilot Max", "$100 per month", { planVerified: false })];
+    expect(comparePricing(claims, evidence).map((x) => [x.status, x.historicalAccuracy])).toEqual([["unchanged", "consistent"], ["unchanged", "consistent"]]);
+    const [note] = assessOffering(claims, evidence);
+    expect(note!.plansNotDiscussed.map((p) => p.plan)).toEqual(["Copilot Pro+", "Copilot Max"]);
+  });
+  it("never lists third-party or plan-unverified prices as part of the offering", () => {
+    const claims = [c("Copilot Pro", "$10 per month")];
+    expect(assessOffering(claims, [e("Copilot Max", "$100 per month", { sourceKind: "third_party" }), e("Copilot Max", "$100 per month", { planVerified: false })])).toEqual([]);
+  });
+  it("flags an earlier answer that was already out of date, distinct from a change since", () => {
+    const [x] = comparePricing([c("Copilot Pro", "$10 per month")], [e("Copilot Pro", "$12 per month", { publishedAt: "2026-10-01T00:00:00Z" })]);
+    expect(x).toMatchObject({ status: "uncertain", historicalAccuracy: "already_outdated" });
+    expect(x!.explanation).toMatch(/already listed/);
+  });
+});
+
+describe("explainMissingEvidence", () => {
+  const row = { subject: "Pipedrive", category: "pricing" as const, attribute: "Professional", previousValue: "$49", status: "uncertain" as const, dimension: "evidence" as const, explanation: "No current pricing evidence was found in the sources searched.", evidenceIds: [], sourceIds: [] };
+  it("says vendor pages were found but stated no price (JS-rendered or blocked pricing page)", () => {
+    const [c] = explainMissingEvidence([row], [{ ...src("S1", "What's new in Pipedrive plans?", "Plans overview", "official_pricing"), url: "https://support.pipedrive.com/x" }]);
+    expect(c!.explanation).toMatch(/vendor's own site were found .* none stated a price/);
+    expect(c!.status).toBe("uncertain");
+  });
+  it("says no vendor page was found when none was", () => {
+    const [c] = explainMissingEvidence([row], [src("S1", "Best CRMs", "HubSpot and Zoho compared")]);
+    expect(c!.explanation).toMatch(/No page on the vendor's own site was found/);
+  });
+});
+
 describe("comparison dimensions", () => {
   const claim = { subject: "Neon", category: "pricing" as const, attribute: "Launch", value: "$19 per month", messageId: "m", statedAt: "2026-11-10T10:00:00Z" };
   let n = 0;
@@ -160,6 +202,33 @@ describe("comparison dimensions", () => {
     const [c] = comparePricing([claim], [ev("$0.14 per CU-hour"), ev("$0.106 per CU-hour")]);
     expect(c).toMatchObject({ status: "changed", dimension: "pricing_model" });
     expect(c!.explanation).toMatch(/different rates/);
+  });
+  it("regression (live 2026-11-15): prefers the plan-verified official rate over an unverified superseded one", () => {
+    // Exact shape of the failing live run: S3 blog post with the old $0.14 rate (no plan attached),
+    // S6 FAQ "The Launch plan ... You pay $0.106 per CU-hour" (plan verified). Both official, undated.
+    const stale = ev("$0.14 per CU-hour", { planVerified: false, sourceId: "S3" });
+    const faq = ev("$0.106 per CU-hour", { planVerified: true, sourceId: "S6" });
+    const [c] = comparePricing([claim], [stale, faq]);
+    expect(c).toMatchObject({ status: "changed", dimension: "pricing_model", currentValue: "$0.106 per CU-hour" });
+    expect(c!.sourceIds[0]).toBe("S6");
+  });
+  it("prefers a plan-verified vendor page over the vendor's unverified pricing page (Freshsales card layout)", () => {
+    const fs = { ...claim, subject: "Freshsales", attribute: "Pro", value: "$39 per user/month, billed annually" };
+    const pricingPage = ev("$39/user/month", { subject: "Freshsales", attribute: "Pro", sourceKind: "official_pricing", planVerified: false, sourceId: "S1" });
+    const suitePage = ev("$39 user month billed annually", { subject: "Freshsales", attribute: "Pro", sourceKind: "official", planVerified: true, sourceId: "S2" });
+    const [c] = comparePricing([fs], [pricingPage, suitePage]);
+    expect(c).toMatchObject({ status: "unchanged", sourceIds: ["S2"] });
+    expect(c!.explanation).not.toMatch(/doesn't name the plan/);
+  });
+  it("treats an implausible >5× change as an artifact, not a price change (Zoho '$2323')", () => {
+    const z = { ...claim, subject: "Zoho CRM", attribute: "Professional", value: "$23 per user/month" };
+    const [c] = comparePricing([z], [ev("$2323 per user/month", { subject: "Zoho CRM", attribute: "Professional", planVerified: true })]);
+    expect(c!.status).toBe("uncertain");
+    expect(c!.explanation).toMatch(/artifact/);
+  });
+  it("still refuses a model-change verdict when no official rate is tied to the plan", () => {
+    const [c] = comparePricing([claim], [ev("$0.14 per CU-hour", { planVerified: false }), ev("$0.106 per CU-hour", { planVerified: false })]);
+    expect(c).toMatchObject({ status: "uncertain", dimension: "pricing_model" });
   });
   it("treats 'per calendar month' as a plan period, not a usage meter", () => {
     const [c] = comparePricing([{ ...claim, value: "$10 per month" }], [ev("$10 USD per calendar month")]);

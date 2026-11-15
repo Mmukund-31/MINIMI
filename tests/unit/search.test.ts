@@ -61,6 +61,24 @@ describe("dedupeResults", () => {
   });
 });
 
+describe("mergeSamePage", () => {
+  it("merges one page served under several URLs, keeping every distinct excerpt", () => {
+    const out = dedupeResults([
+      res("https://neon.tech/unify?a=1&n=blog", { title: "Neon’s New Pricing, Explained", snippet: "Launch was $0.14 per CU-hour.", providerScore: 0.9 }),
+      res("https://neon.com/blog/new-usage-based-pricing", { title: "Neon’s New Pricing, Explained", snippet: "Launch compute is $0.106 per CU-hour.", providerScore: 0.8 }),
+      res("https://neon.com/pricing", { title: "Neon Pricing", snippet: "Pricing page" }),
+    ]);
+    expect(out).toHaveLength(2);
+    const merged = out.find((r) => r.title.startsWith("Neon’s"))!;
+    expect(`${merged.snippet}\n${merged.content}`).toContain("$0.14");
+    expect(`${merged.snippet}\n${merged.content}`).toContain("$0.106");
+  });
+  it("never merges pages from different owners or with short generic titles", () => {
+    expect(dedupeResults([res("https://a.com/x", { title: "Pricing" }), res("https://a.com/y", { title: "Pricing" })])).toHaveLength(2);
+    expect(dedupeResults([res("https://a.com/x", { title: "Acme pricing explained" }), res("https://b.com/x", { title: "Acme pricing explained" })])).toHaveLength(2);
+  });
+});
+
 describe("rankSources", () => {
   const now = new Date("2026-11-15T00:00:00Z");
   it("ranks the official pricing page above a higher-scored third-party page and demotes stale articles", () => {

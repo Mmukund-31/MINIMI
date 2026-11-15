@@ -8,6 +8,8 @@ export * from "./temporal/resolver";
 export * from "./memory/retrieval";
 export * from "./llm/types";
 export * from "./llm/client";
+export * from "./llm/anthropic";
+export * from "./llm/openai-compatible";
 export * from "./llm/usage";
 export * from "./llm/structured-output";
 export * from "./search/provider";

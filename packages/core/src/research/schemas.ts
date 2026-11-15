@@ -1,0 +1,73 @@
+import { z } from "zod";
+
+/**
+ * Structured-output contracts for the LLM-assisted stages. Every field is
+ * required (nullable where optional) so the schemas work with provider
+ * structured-output modes; Zod re-validates every response locally.
+ */
+
+export const AnalysisSchema = z.object({
+  intent: z.enum(["chat", "memory_recall", "research", "memory_and_research"]),
+  needsMemory: z.boolean().describe("True if answering requires recalling an earlier conversation."),
+  needsWebSearch: z.boolean().describe("True if answering requires current facts from the web."),
+  standaloneQuestion: z.string().max(600).describe("The request rewritten to be understandable without chat history."),
+  entities: z.array(z.string().max(80)).max(12).describe("Products, companies, technologies or topics named or referred to."),
+  temporalExpressions: z.array(z.string().max(60)).max(6).describe("Date/time phrases exactly as written, e.g. 'last Tuesday'."),
+  asksAboutPricing: z.boolean(),
+  asksAboutProductUpdates: z.boolean(),
+});
+export type Analysis = z.infer<typeof AnalysisSchema>;
+
+export const PlanSchema = z.object({
+  subjects: z
+    .array(z.object({ name: z.string().max(80), officialDomain: z.string().max(80).nullable() }))
+    .max(8),
+  historicalClaims: z
+    .array(
+      z.object({
+        subject: z.string().max(80),
+        category: z.enum(["pricing", "product_update", "other"]),
+        attribute: z.string().max(80).describe("Plan or aspect, e.g. 'Pro plan' or 'Node 20 end-of-life'."),
+        value: z.string().max(160).describe("Value exactly as stated in the earlier answer."),
+        messageId: z.string().max(60),
+      }),
+    )
+    .max(20),
+  searches: z
+    .array(
+      z.object({
+        query: z.string().min(3).max(160),
+        purpose: z.enum(["pricing", "product_update", "general"]),
+        subject: z.string().max(80).nullable(),
+      }),
+    )
+    .max(12),
+});
+export type Plan = z.infer<typeof PlanSchema>;
+
+export const EvidenceExtractionSchema = z.object({
+  findings: z
+    .array(
+      z.object({
+        subject: z.string().max(80),
+        category: z.enum(["pricing", "other"]),
+        attribute: z.string().max(80),
+        value: z.string().max(200),
+        quote: z.string().max(500).describe("Verbatim text copied from the source that supports the value."),
+        sourceId: z.string().max(8),
+      }),
+    )
+    .max(40),
+  updates: z
+    .array(
+      z.object({
+        subject: z.string().max(80),
+        title: z.string().max(200),
+        quote: z.string().max(500),
+        sourceId: z.string().max(8),
+        significance: z.enum(["major", "minor"]),
+      }),
+    )
+    .max(20),
+});
+export type EvidenceExtraction = z.infer<typeof EvidenceExtractionSchema>;

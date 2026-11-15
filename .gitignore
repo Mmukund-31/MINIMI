@@ -1,0 +1,37 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+*.tsbuildinfo
+
+# environment / secrets
+.env
+.env.*
+!.env.example
+
+# local databases (contain conversation history)
+data/*
+!data/.gitkeep
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# eval run artifacts (live runs contain fetched web content)
+evals/results/*
+!evals/results/.gitkeep
+
+# logs & temp
+logs/
+*.log
+npm-debug.log*
+.tmp/
+coverage/
+
+# editors / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db

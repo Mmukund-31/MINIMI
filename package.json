@@ -1,0 +1,41 @@
+{
+  "name": "minimi-research-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A memory-aware conversational research agent with exactly one tool: web search.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c blue,magenta \"npm run dev -w @minimi/api\" \"npm run dev -w @minimi/web\"",
+    "build": "npm run typecheck && npm run build -w @minimi/web && npm run build -w @minimi/api",
+    "start": "npm run start -w @minimi/api",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json && tsc -p apps/web/tsconfig.json",
+    "eval": "tsx evals/runner.ts",
+    "eval:live": "tsx evals/live-runner.ts",
+    "seed:reset": "tsx packages/core/src/seed/reset-cli.ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/luxon": "^3.7.6",
+    "@types/node": "^26.6.6",
+    "concurrently": "^10.0.7",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.15.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.14.0",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.2",
+    "vitest": "^5.1.0"
+  }
+}

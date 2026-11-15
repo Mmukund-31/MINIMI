@@ -23,11 +23,24 @@ const STATUS: Record<Comparison["status"], { label: string; cls: string; hint: s
   },
 };
 
-export function StatusChip({ status }: { status: Comparison["status"] }) {
+const DIMENSION: Record<NonNullable<Comparison["dimension"]>, string> = {
+  price_amount: "price",
+  pricing_model: "pricing model",
+  billing_terms: "billing terms",
+  currency: "currency",
+  plan_availability: "plan availability",
+  feature: "features",
+  evidence: "evidence",
+};
+
+export function StatusChip({ status, dimension }: { status: Comparison["status"]; dimension?: Comparison["dimension"] }) {
   const s = STATUS[status];
   return (
-    <span title={s.hint} className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-medium whitespace-nowrap ring-1 ring-inset ${s.cls}`}>
-      {s.label}
+    <span className="inline-flex flex-col items-start gap-1">
+      <span title={s.hint} className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-medium whitespace-nowrap ring-1 ring-inset ${s.cls}`}>
+        {s.label}
+      </span>
+      {dimension && dimension !== "evidence" && <span className="text-[10px] whitespace-nowrap text-zinc-500">{DIMENSION[dimension]}</span>}
     </span>
   );
 }
@@ -81,7 +94,7 @@ export function ComparisonTable({ comparisons, sources }: { comparisons: Compari
                         </div>
                       </td>
                       <td className="px-3 py-2.5">
-                        <StatusChip status={c.status} />
+                        <StatusChip status={c.status} dimension={c.dimension} />
                       </td>
                     </tr>
                   ))}

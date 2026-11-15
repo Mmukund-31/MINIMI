@@ -14,7 +14,7 @@ import { normalizeUrl } from "../search/normalize";
 const OPEN = new Set(["[", "【"]);
 const CLOSE = new Set(["]", "】"]);
 /** A bracket that could still become a citation: S-ids, separators, ranges, spaces, and †-suffixes. */
-const PARTIAL = /^[[【]\s*(S[0-9S,;\s†Ll\-‐‑–—]*)?$/i;
+const PARTIAL = /^[[【]\s*(S[0-9S,;\s†Ll\-‐‑–—]*|\d[\d,;\s]*)?$/i;
 const RANGE = /^S(\d+)\s*[-‐‑–—]\s*S?(\d+)$/i;
 
 export class CitationFilter {
@@ -52,10 +52,20 @@ export class CitationFilter {
   }
 
   private resolve(bracket: string): string {
+    // Models sometimes drop the "S" ("[5][6]"). Treat bare numbers as citations only if every
+    // number maps to a retrieved source; otherwise leave the text untouched (e.g. "[1950]").
+    const bare = /^[[【]\s*(\d+(\s*[,;]\s*\d+)*)\s*[\]】]$/.exec(bracket);
+    if (bare) {
+      const nums = bare[1]!.split(/[,;]/).map((n) => `S${n.trim()}`);
+      if (!nums.every((id) => this.validIds.has(id))) return bracket;
+      for (const id of nums) this.used.add(id);
+      return nums.map((id) => `[${id}]`).join("");
+    }
     const ids = bracket
       .slice(1, -1)
-      .split(/[,;]/)
-      .map((s) => s.replace(/†.*$/, "").trim().toUpperCase())
+      .replace(/†[^\s,;]*/g, "")
+      .split(/[,;\s]+/)
+      .map((s) => s.trim().toUpperCase())
       .filter(Boolean)
       .flatMap((s) => {
         const r = RANGE.exec(s);
@@ -137,6 +147,46 @@ export class StreamUrlFilter {
     this.removed.push(url);
     return trailing;
   }
+}
+
+/**
+ * Deterministic citation repair. Models sometimes state verified facts without
+ * citing them. A sentence that has no citation, names an evidence item's
+ * subject, and states a number from that item's verified value gets that
+ * item's source id appended. It only ever attaches sources that contain the
+ * stated value (evidence is quote-verified), so it can't invent support.
+ */
+export function attachMissingCitations(
+  text: string,
+  evidence: Array<{ subject: string; value: string; sourceId: string; category: string }>,
+): string {
+  const numbers = (s: string) => [...s.replace(/,(?=\d{3}\b)/g, "").matchAll(/\d+(?:\.\d+)?/g)].map((m) => Number(m[0])).filter((n) => n !== 0);
+  // Only amounts written as prices count ("$19", "€25", "19 USD"), never counts like "10 developers".
+  const prices = (s: string) =>
+    [...s.replace(/,(?=\d{3}\b)/g, "").matchAll(/[$€£₹¥]\s?(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s?(?:usd|eur|gbp|inr)\b/gi)]
+      .map((m) => Number(m[1] ?? m[2]))
+      .filter((n) => n !== 0);
+  const tokens = (s: string) => s.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 3);
+  const parts = text.split(/(?<=[.!?])(?=\s)|(?=\n)/);
+  return parts
+    .map((sentence) => {
+      if (/\[S\d+\]/.test(sentence)) return sentence;
+      const lower = sentence.toLowerCase();
+      const nums = new Set(prices(sentence));
+      if (nums.size === 0) return sentence;
+      const ids: string[] = [];
+      for (const e of evidence) {
+        if (e.category !== "pricing" || ids.includes(e.sourceId)) continue;
+        const subj = tokens(e.subject)[0];
+        if (!subj || !lower.includes(subj)) continue;
+        if (!numbers(e.value).some((n) => nums.has(n))) continue;
+        ids.push(e.sourceId);
+        if (ids.length === 2) break;
+      }
+      if (ids.length === 0) return sentence;
+      return sentence.replace(/([.!?]?)(\s*)$/, `${ids.map((id) => ` [${id}]`).join("")}$1$2`);
+    })
+    .join("");
 }
 
 /**

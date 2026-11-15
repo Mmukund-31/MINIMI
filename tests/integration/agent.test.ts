@@ -31,10 +31,11 @@ describe("Demo 1: CRM shortlist (memory + pricing + product updates)", async () 
     expect(llm.structuredCalls()).toEqual(["message_analysis", "research_plan", "evidence_extraction"]);
   });
 
-  it("quarantines the prompt-injection result", () => {
+  it("keeps the prompt-injection result out of the evidence pool", () => {
+    // With official-domain-first search the spam page is filtered at search time;
+    // quarantine of injected pages that do arrive is covered by eval A01 and unit tests.
     const urls = eventsOf(events, "sources")[0]!.sources.map((s) => s.url);
     expect(urls.some((u) => u.includes("seo-spam"))).toBe(false);
-    expect(result!.metadata.notes!.join(" ")).toMatch(/instructions aimed at AI systems/);
   });
 
   it("computes the expected statuses deterministically", () => {

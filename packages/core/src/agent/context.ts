@@ -34,13 +34,62 @@ export function formatMemory(exchanges: MemoryExchange[], timezone: string, maxC
   return truncate(blocks.join("\n"), maxChars);
 }
 
+/**
+ * Query-focused excerpt: when a page is longer than the budget, keep verbatim
+ * windows around prices and the focus terms (plan/vendor names) instead of just
+ * the start of the page (pricing tables are rarely at the top). Windows are
+ * joined with " … ", which the quote verifier understands as an elision.
+ */
+export function focusedExcerpt(text: string, budget: number, focusTerms: string[] = []): string {
+  if (text.length <= budget) return text;
+  const anchors: number[] = [];
+  for (const m of text.matchAll(/[$€£₹¥]\s?\d/g)) anchors.push(m.index);
+  for (const term of focusTerms.map((t) => t.trim()).filter((t) => t.length >= 3)) {
+    // Whole-word matches only ("Pro" must not match "Products").
+    const re = new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi");
+    for (const m of text.matchAll(re)) {
+      if (anchors.length >= 400) break;
+      anchors.push(m.index);
+    }
+  }
+  if (anchors.length === 0) return truncate(text, budget);
+  const radius = 160;
+  const maxWindow = Math.max(4 * radius, Math.floor(budget / 2));
+  const windows = anchors
+    .sort((a, b) => a - b)
+    .map((a) => [Math.max(0, a - radius), Math.min(text.length, a + radius)] as [number, number])
+    .reduce<Array<[number, number]>>((acc, w) => {
+      const last = acc[acc.length - 1];
+      // Merge overlapping windows, but never into one block too big to fit the budget.
+      if (last && w[0] <= last[1] && Math.max(last[1], w[1]) - last[0] <= maxWindow) last[1] = Math.max(last[1], w[1]);
+      else acc.push([...w]);
+      return acc;
+    }, []);
+  // Price windows first (they carry the facts), then the rest, until the budget is used.
+  const hasPrice = (w: [number, number]) => /[$€£₹¥]\s?\d/.test(text.slice(w[0], w[1]));
+  const ordered = [...windows.filter(hasPrice), ...windows.filter((w) => !hasPrice(w))];
+  const picked: Array<[number, number]> = [];
+  let used = 0;
+  for (const w of ordered) {
+    if (used + (w[1] - w[0]) > budget) continue;
+    picked.push(w);
+    used += w[1] - w[0] + 3;
+  }
+  if (picked.length === 0) return truncate(text, budget);
+  // Trim to word boundaries so no window starts or ends mid-word.
+  return picked
+    .sort((a, b) => a[0] - b[0])
+    .map(([s, e]) => text.slice(s, e).replace(/^\S*\s/, s === 0 ? "$&" : "").replace(/\s\S*$/, e === text.length ? "$&" : ""))
+    .join(" … ");
+}
+
 /** Sources wrapped as clearly delimited, untrusted data blocks. */
-export function formatSourcesForExtraction(sources: Source[], maxChars: number): string {
+export function formatSourcesForExtraction(sources: Source[], maxChars: number, focusTerms: string[] = []): string {
   if (sources.length === 0) return "(no results)";
   const per = Math.max(400, Math.floor(maxChars / sources.length) - 120);
   return sources
     .map((s) => {
-      const body = truncate(`${s.snippet}\n${s.content ?? ""}`.trim(), per).replace(/<\/?source[^>]*>/gi, "");
+      const body = focusedExcerpt(`${s.snippet}\n${s.content ?? ""}`.trim(), per, focusTerms).replace(/<\/?source[^>]*>/gi, "");
       return `<source id="${s.id}" domain="${s.sourceDomain}" kind="${s.kind}" published="${s.publishedAt?.slice(0, 10) ?? "unknown"}">\nTitle: ${truncate(s.title, 160)}\n${body}\n</source>`;
     })
     .join("\n");
@@ -86,7 +135,7 @@ export function buildSynthesisContext(i: SynthesisInput): string {
   if (i.comparisons.length > 0) {
     const rows = i.comparisons.map(
       (c) =>
-        `- ${c.subject} | ${c.category} | ${c.attribute} | then: ${c.previousValue ?? "n/a"} | now: ${c.currentValue ?? "n/a"} | status: ${c.status} | ${c.explanation}${c.sourceIds.length ? ` | sources: ${c.sourceIds.map((s) => `[${s}]`).join("")}` : ""}`,
+        `- ${c.subject} | ${c.category} | ${c.attribute} | then: ${c.previousValue ?? "n/a"} | now: ${c.currentValue ?? "n/a"} | status: ${c.status} | dimension: ${c.dimension} | ${c.explanation}${c.sourceIds.length ? ` | sources: ${c.sourceIds.map((s) => `[${s}]`).join("")}` : ""}`,
     );
     parts.push(`<comparisons>\n${truncate(rows.join("\n"), Math.floor(budget * 0.2))}\n</comparisons>`);
   }

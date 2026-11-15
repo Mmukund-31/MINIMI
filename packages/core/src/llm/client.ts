@@ -47,6 +47,11 @@ export interface StreamRequest {
 export class LLMClient {
   constructor(private readonly roles: Record<LLMRole, RoleBinding>) {}
 
+  /** True when two roles use different models (and so, on Groq, different rate-limit quotas). */
+  hasDistinctModel(a: LLMRole, b: LLMRole): boolean {
+    return this.roles[a].model !== this.roles[b].model || this.roles[a].provider !== this.roles[b].provider;
+  }
+
   describe(): { provider: string; models: string[] } {
     const all = [this.roles.fast, this.roles.extract, this.roles.synthesis];
     return { provider: [...new Set(all.map((r) => r.provider.name))].join("+"), models: [...new Set(all.map((r) => r.model))] };

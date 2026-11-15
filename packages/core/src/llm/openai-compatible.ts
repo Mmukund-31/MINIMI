@@ -134,7 +134,14 @@ function mapError(err: unknown, provider: string): unknown {
   if (err instanceof AppError) return err;
   if (err instanceof OpenAI.APIUserAbortError) return err;
   if (err instanceof OpenAI.RateLimitError) {
-    return new AppError("LLM_RATE_LIMIT", `${provider} rate limit reached. Please wait a moment and retry.`, { retryable: true, cause: err });
+    const daily = /per day|TPD|RPD/i.test(err.message);
+    return new AppError(
+      "LLM_RATE_LIMIT",
+      daily
+        ? `${provider} daily token quota reached for this model. Try again later, or set a different model/provider in .env.`
+        : `${provider} rate limit reached. Please wait a moment and retry.`,
+      { retryable: true, cause: err },
+    );
   }
   if (err instanceof OpenAI.AuthenticationError || err instanceof OpenAI.PermissionDeniedError) {
     return new AppError("NOT_CONFIGURED", `${provider} rejected the API key.`, { cause: err });

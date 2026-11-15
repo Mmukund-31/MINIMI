@@ -54,14 +54,25 @@ export function keywords(text: string): string[] {
   return out;
 }
 
-/** Loose subject equality: "HubSpot Sales Hub" ≈ "hubspot", "Neon" ≈ "Neon Postgres". */
+const SUBJECT_FILLER = new Set(["the", "for", "and", "inc", "by", "of"]);
+
+/** Significant lowercase tokens of a product/vendor name. */
+export function subjectTokens(s: string): string[] {
+  return normalizeForMatch(s)
+    .replace(/[^a-z0-9 ]/g, " ")
+    .split(/\s+/)
+    .filter((t) => t && !SUBJECT_FILLER.has(t));
+}
+
+/**
+ * Subject equality: every significant token of the shorter name must appear
+ * in the longer one. "HubSpot" ≈ "HubSpot Sales Hub", "Neon" ≈ "Neon Launch",
+ * "AWS RDS" ≈ "AWS RDS for PostgreSQL", but "Google Cloud SQL" ≠ "Google Workspace".
+ */
 export function subjectMatches(a: string, b: string): boolean {
-  const na = normalizeForMatch(a).replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
-  const nb = normalizeForMatch(b).replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
-  if (!na || !nb) return false;
-  if (na === nb) return true;
-  const ta = na.split(" ");
-  const tb = nb.split(" ");
-  // the first significant token must match (brand name), e.g. "hubspot" / "aws"
-  return ta[0] === tb[0] || na.includes(nb) || nb.includes(na);
+  const ta = subjectTokens(a);
+  const tb = subjectTokens(b);
+  if (ta.length === 0 || tb.length === 0) return false;
+  const [small, large] = ta.length <= tb.length ? [ta, new Set(tb)] : [tb, new Set(ta)];
+  return small.every((t) => large.has(t));
 }

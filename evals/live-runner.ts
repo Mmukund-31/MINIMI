@@ -11,12 +11,16 @@
  * integrity; factual accuracy of current prices needs a human to open the
  * cited sources (the report lists them).
  */
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createRuntime, loadConfig, loadDotEnv, missingCredentials, type AgentEvent, type Logger, type Message } from "@minimi/core";
+import { createRuntime, loadConfig, loadDotEnv, missingCredentials, type AgentEvent, type Comparison, type Logger, type Message } from "@minimi/core";
+import { gradeEntry, rowMentionsEntity, structuralChecks, summarizeGrades, type GradedEntry, type GroundTruthEntry } from "./grading";
 
 const here = dirname(fileURLToPath(import.meta.url));
+const groundTruth = JSON.parse(readFileSync(join(here, "ground-truth.json"), "utf8")) as { fetchedAt: string; cases: Record<string, GroundTruthEntry[]> };
+// Groq counts requested max_tokens against the per-minute limit; consecutive research cases need a pause.
+const PAUSE_MS = Number(process.env.LIVE_EVAL_PAUSE_MS ?? 20_000);
 
 const CASES: Array<{ id: string; prompt: string; expectMemory?: string; expectSearch: boolean }> = [
   { id: "demo-crm", prompt: "On Monday we shortlisted 5 CRM tools for a 20-person sales team. Has any of them changed pricing or shipped something big since?", expectMemory: "CRM shortlist", expectSearch: true },
@@ -33,8 +37,54 @@ class CapturingLogger implements Logger {
   error(obj: object, msg?: string) { this.entries.push({ level: "error", msg, obj: obj as Record<string, unknown> }); }
 }
 
+/**
+ * `--from=<saved run json>`: re-render LIVE_REPORT.md from a saved run without calling any API.
+ * Ground-truth grading and the entity check are recomputed with the current grader; every
+ * other check and all system outputs are exactly as recorded in that run.
+ */
+function rerenderFrom(file: string) {
+  const saved = JSON.parse(readFileSync(file, "utf8")) as { ranAt: string; provider: { provider: string; models: string[] }; results: Array<Record<string, unknown>> };
+  for (const r of saved.results) {
+    const comparisons = (r.comparisons ?? []) as Comparison[];
+    const truth = groundTruth.cases[r.id as string] ?? [];
+    r.graded = truth.map((e) => gradeEntry(e, comparisons));
+    r.gradeSummary = summarizeGrades(r.graded as GradedEntry[]);
+    const checks = r.checks as Record<string, boolean>;
+    checks.entitiesCovered = [...new Set(truth.map((t) => t.subject))].every((s) => comparisons.some((x) => rowMentionsEntity(x, s)));
+    r.pass = Object.values(checks).every(Boolean);
+    r.violations ??= [];
+    r.planAttribution ??= { verified: 0, total: 0 };
+  }
+  const note = `Re-rendered from the saved run \`${file.replace(/.*[\\/]/, "")}\`; ground-truth grading and the entity check were recomputed with the current grader, everything else is as recorded.`;
+  writeFileSync(join(here, "LIVE_REPORT.md"), renderReport(saved.ranAt, saved.provider, saved.results, note));
+  console.log(`Re-rendered evals/LIVE_REPORT.md from ${file}`);
+}
+
+/** Summary of every complete saved run, to show run-to-run variance honestly. */
+function runHistory(): string[] {
+  const dir = join(here, "results");
+  const rows: string[] = [];
+  for (const f of readdirSync(dir).filter((x) => /^live-.*\.json$/.test(x)).sort()) {
+    try {
+      const j = JSON.parse(readFileSync(join(dir, f), "utf8")) as { ranAt: string; results: Array<Record<string, unknown>> };
+      if (j.results.length < CASES.length) continue;
+      const g = j.results.flatMap((r) => (r.graded ?? []) as GradedEntry[]);
+      const count = (k: string) => g.filter((x) => x.grade === k).length;
+      const fallback = j.results.filter((r) => ((r.notes ?? []) as string[]).some((n) => /rate-limited/.test(n))).length;
+      const quotaOut = j.results.filter((r) => /LLM_RATE_LIMIT/.test(String(r.error ?? ""))).length;
+      const grades = j.results.some((r) => "graded" in r) ? `${count("correct")} / ${count("abstained")} / ${count("wrong")} / ${count("missing")}` : "– (run predates grading)";
+      rows.push(`| ${j.ranAt.slice(0, 16).replace("T", " ")} | ${j.results.filter((r) => r.pass).length}/${j.results.length} | ${grades} | ${fallback ? `${fallback} case(s) used the fallback extractor` : ""}${quotaOut ? `${fallback ? "; " : ""}${quotaOut} case(s) failed: daily quota exhausted` : ""} |`);
+    } catch {
+      /* skip unreadable files */
+    }
+  }
+  return rows;
+}
+
 async function main() {
   loadDotEnv();
+  const from = process.argv.find((a) => a.startsWith("--from="))?.slice(7);
+  if (from) return rerenderFrom(from);
   const only = process.argv.find((a) => a.startsWith("--only="))?.slice(7);
   const dbPath = join(here, "results", `live-${Date.now()}.db`);
   mkdirSync(join(here, "results"), { recursive: true });
@@ -52,6 +102,7 @@ async function main() {
 
   const results: Array<Record<string, unknown>> = [];
   for (const c of CASES.filter((x) => !only || x.id === only)) {
+    if (results.length > 0 && PAUSE_MS > 0) await new Promise((r) => setTimeout(r, PAUSE_MS));
     const events: AgentEvent[] = [];
     const t0 = Date.now();
     const logStart = logger.entries.length;
@@ -73,18 +124,38 @@ async function main() {
     const memoryTitles = (meta?.memory?.conversationIds ?? []).map((id) => runtime.repos.conversations.get(id)?.title ?? id);
     const searches = events.filter((e): e is Extract<AgentEvent, { type: "search" }> => e.type === "search" && e.status !== "start");
 
+    const comparisons = meta?.comparisons ?? [];
+    const truth = groundTruth.cases[c.id] ?? [];
+    const graded = truth.map((e) => gradeEntry(e, comparisons));
+    const violations = structuralChecks({
+      comparisons,
+      sources: sourcesEvt?.sources ?? [],
+      baselineDate: meta?.memory?.baselineDate,
+      answer: message?.content ?? "",
+      retrievedSourceIds: allSourceIds,
+    });
+    const evRows = message ? runtime.repos.research.evidenceForMessage(message.id) : [];
+    const pricingEv = evRows.map((r) => JSON.parse(String(r.metadata)) as { category?: string; planVerified?: boolean }).filter((m) => m.category === "pricing");
+
     const checks: Record<string, boolean> = {
       completed: !error,
-      memory: c.expectMemory ? memoryTitles.some((t) => t.includes(c.expectMemory!)) : true,
+      historicalConversation: c.expectMemory ? memoryTitles.some((t) => t.includes(c.expectMemory!)) : true,
       searchedWhenExpected: c.expectSearch ? searches.length > 0 : searches.length === 0,
       citationsResolve: cites.every((id) => allSourceIds.has(id)),
       citesSomething: c.expectSearch ? cites.length > 0 : true,
+      // Correct entities: every vendor from the earlier conversation gets a comparison row.
+      entitiesCovered: [...new Set(truth.map((t) => t.subject))].every((s) => comparisons.some((x) => rowMentionsEntity(x, s))),
+      structural: violations.length === 0,
     };
     const row = {
       id: c.id,
       prompt: c.prompt,
       pass: Object.values(checks).every(Boolean),
       checks,
+      graded,
+      gradeSummary: summarizeGrades(graded),
+      violations,
+      planAttribution: { verified: pricingEv.filter((m) => m.planVerified).length, total: pricingEv.length },
       error,
       latencyMs: ms,
       llmCalls: meta?.stats?.llmCalls,
@@ -94,15 +165,20 @@ async function main() {
       memory: { status: meta?.memory?.status, titles: memoryTitles, interpretation: meta?.memory?.interpretation },
       searches: searches.map((s) => ({ query: s.query, status: s.status, results: s.resultCount, error: s.error })),
       evidence: { kept: evidenceKept, rejected: rejected.length, rejectedDetail: rejected },
-      comparisons: meta?.comparisons ?? [],
+      comparisons,
       sources: meta?.sources ?? [],
       allSources: sourcesEvt?.sources.map((s) => ({ id: s.id, domain: s.domain, kind: s.kind, title: s.title, url: s.url })) ?? [],
       notes: meta?.notes ?? [],
+      warnings: logs.filter((l) => l.level !== "info").map((l) => ({ level: l.level, msg: l.msg, err: (l.obj as { err?: unknown }).err })),
       answer: message?.content,
     };
     results.push(row);
     console.log(`${row.pass ? "PASS" : "FAIL"} ${c.id} · ${(ms / 1000).toFixed(1)}s · ${row.searchCalls ?? 0} searches · ${row.llmCalls ?? 0} LLM calls · ${row.tokens ?? 0} tokens · evidence ${evidenceKept} kept / ${rejected.length} rejected${error ? ` · ${error}` : ""}`);
     for (const [k, v] of Object.entries(checks)) if (!v) console.log(`   ✗ ${k}`);
+    for (const v of violations) console.log(`   ✗ ${v.check}: ${v.detail}`);
+    const gs = row.gradeSummary;
+    if (gs.gradable) console.log(`   ground truth${gs.provisional ? " (PROVISIONAL)" : ""}: ${gs.correct} correct · ${gs.abstained} abstained · ${gs.wrong} wrong · ${gs.missing} missing · ${gs.ungraded} ungraded`);
+    for (const g of graded.filter((x) => x.grade === "wrong" || x.grade === "missing")) console.log(`   ✗ ${g.subject} ${g.plan}: ${g.grade} (${g.reason})`);
   }
   runtime.close();
   for (const suffix of ["", "-wal", "-shm"]) rmSync(dbPath + suffix, { force: true });
@@ -114,40 +190,58 @@ async function main() {
   console.log(`\n${passed}/${results.length} live cases passed automatic checks.${only ? "" : " Report: evals/LIVE_REPORT.md"}`);
 }
 
-function renderReport(stamp: string, llm: { provider: string; models: string[] }, results: Array<Record<string, unknown>>): string {
+function renderReport(stamp: string, llm: { provider: string; models: string[] }, results: Array<Record<string, unknown>>, note?: string): string {
   const lines = [
     "# Live evaluation report",
     "",
-    `Run on ${stamp} with \`npm run eval:live\` · LLM: ${llm.provider} (${llm.models.join(", ")}) · search: Tavily.`,
-    "Fresh temporary database seeded with the labelled demo conversations; search cache disabled.",
-    "Automatic checks: completed, retrieved the right conversation, searched when expected, every [S#] resolves to a retrieved source.",
-    "**Not automatically checked:** whether current prices are factually right. Open the cited sources below to verify.",
+    `Run on ${stamp} with \`npm run eval:live\` · LLM: ${llm.provider} (${llm.models.join(", ")}) · search: Tavily.${note ? ` ${note}` : ""}`,
+    `Fresh temporary database seeded with the labelled demo conversations; search cache disabled; ${PAUSE_MS / 1000}s pause between cases (one user asking one question at a time; Groq free-tier limits are per minute).`,
     "",
-    "| Case | Result | Latency | LLM calls | Searches | Tokens | Evidence kept / rejected |",
-    "|---|---|---|---|---|---|---|",
+    "**Automatic checks (pass/fail):** completed · retrieved the right earlier conversation · searched when expected · every [S#] resolves to a retrieved source · research answers cite something · every vendor from the earlier conversation has a comparison row · structural checks (no verdict without an official source or an explicit third-party qualification, no amount change across incompatible terms, no 'changed' resting on a page published before the conversation).",
+    "",
+    `**Ground-truth grading** uses [ground-truth.json](ground-truth.json) (official pages fetched ${groundTruth.fetchedAt}). Entries not marked \`human-confirmed\` make the grade **PROVISIONAL**. *abstained* = honest uncertain/not-comparable where a verdict was possible; *wrong* = a confident verdict the ground truth contradicts.`,
+    "",
+    "| Case | Auto checks | Ground truth (correct / abstained / wrong / missing · ungraded) | Plan attribution verified | Latency | LLM calls | Searches | Tokens | Evidence kept / rejected |",
+    "|---|---|---|---|---|---|---|---|---|",
     ...results.map((r) => {
       const ev = r.evidence as { kept: number; rejected: number };
-      return `| ${r.id} | ${r.pass ? "pass" : "**fail**"} | ${((r.latencyMs as number) / 1000).toFixed(1)}s | ${r.llmCalls ?? "-"} | ${r.searchCalls ?? "-"} | ${r.tokens ?? "-"} | ${ev.kept} / ${ev.rejected} |`;
+      const g = r.gradeSummary as ReturnType<typeof summarizeGrades>;
+      const pa = r.planAttribution as { verified: number; total: number };
+      const gt = g.gradable ? `${g.correct} / ${g.abstained} / ${g.wrong} / ${g.missing} · ${g.ungraded}${g.provisional ? " (provisional)" : ""}` : "–";
+      return `| ${r.id} | ${r.pass ? "pass" : "**fail**"} | ${gt} | ${pa.total ? `${pa.verified}/${pa.total}` : "–"} | ${((r.latencyMs as number) / 1000).toFixed(1)}s | ${r.llmCalls ?? "-"} | ${r.searchCalls ?? "-"} | ${r.tokens ?? "-"} | ${ev.kept} / ${ev.rejected} |`;
     }),
     "",
   ];
   for (const r of results) {
     lines.push(`## ${r.id}`, "", `> ${r.prompt}`, "");
     if (r.error) lines.push(`**Error:** ${r.error}`, "");
+    const failed = Object.entries(r.checks as Record<string, boolean>).filter(([, v]) => !v).map(([k]) => k);
+    if (failed.length) lines.push(`- Failed checks: ${failed.join(", ")}`);
+    for (const v of r.violations as Array<{ check: string; detail: string }>) lines.push(`- Structural violation (${v.check}): ${v.detail}`);
+    const graded = r.graded as GradedEntry[];
+    if (graded.length) {
+      lines.push("", "| Ground truth | Grade | System said | Why |", "|---|---|---|---|");
+      for (const g of graded) lines.push(`| ${g.subject} · ${g.plan} | ${g.grade} | ${g.got ? `${g.got.status} (${g.got.dimension})` : "–"} | ${g.reason} |`);
+      lines.push("");
+    }
     const mem = r.memory as { status?: string; titles: string[]; interpretation?: string };
     if (mem.status) lines.push(`- Memory: ${mem.status}${mem.titles.length ? ` (${mem.titles.join(", ")})` : ""}${mem.interpretation ? `, ${mem.interpretation}` : ""}`);
     const s = r.searches as Array<{ query: string; status: string; results?: number }>;
     if (s.length) lines.push(`- Searches: ${s.map((x) => `"${x.query}" (${x.status}, ${x.results ?? 0})`).join("; ")}`);
     const notes = r.notes as string[];
     if (notes.length) lines.push(`- Notes: ${notes.join(" ")}`);
-    const cmp = r.comparisons as Array<{ subject: string; category: string; attribute: string; previousValue?: string; currentValue?: string; status: string }>;
+    const cmp = r.comparisons as Array<{ subject: string; category: string; attribute: string; previousValue?: string; currentValue?: string; status: string; dimension: string }>;
     if (cmp.length) {
-      lines.push("", "| Subject | Category | Then | Now | Status |", "|---|---|---|---|---|");
-      for (const c of cmp) lines.push(`| ${c.subject} (${c.attribute}) | ${c.category} | ${c.previousValue ?? "-"} | ${c.currentValue ?? "-"} | ${c.status} |`);
+      lines.push("", "| Subject | Category | Then | Now | Status | Dimension |", "|---|---|---|---|---|---|");
+      for (const c of cmp) lines.push(`| ${c.subject} (${c.attribute}) | ${c.category} | ${c.previousValue ?? "-"} | ${c.currentValue ?? "-"} | ${c.status} | ${c.dimension} |`);
     }
     lines.push("", "**Answer:**", "", String(r.answer ?? "(none)"), "");
     const src = r.sources as Array<{ id: string; title: string; url: string; publishedAt?: string }>;
     if (src.length) lines.push("**Sources:**", "", ...src.map((x) => `- [${x.id}] ${x.title} (${x.url})${x.publishedAt ? `, published ${x.publishedAt.slice(0, 10)}` : ""}`), "");
+  }
+  const history = runHistory();
+  if (history.length) {
+    lines.push("## Run history", "", "Every complete live run saved in `evals/results/` (checks and grades as recorded by the code of that time; earlier runs had fewer checks; live results vary because search results and model outputs vary).", "", "| Run (UTC) | Auto checks | Ground truth correct / abstained / wrong / missing | Notes |", "|---|---|---|---|", ...history, "");
   }
   return lines.join("\n");
 }

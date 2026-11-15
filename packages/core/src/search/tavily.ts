@@ -37,6 +37,7 @@ export class TavilySearchProvider implements SearchProvider {
       topic: options.topic ?? "general",
     };
     if (depth === "advanced") body.chunks_per_source = 3;
+    if (options.includeDomains?.length) body.include_domains = options.includeDomains;
     if (options.recency) body.time_range = options.recency;
 
     const timeout = AbortSignal.timeout(this.opts.timeoutMs);

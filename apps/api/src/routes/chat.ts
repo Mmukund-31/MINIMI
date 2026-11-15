@@ -28,6 +28,9 @@ export const chatRoutes =
       if (parsed.data.conversationId && !runtime.repos.conversations.get(parsed.data.conversationId)) {
         throw new AppError("NOT_FOUND", "Conversation not found.");
       }
+      if (parsed.data.conversationId && runtime.agent.isBusy(parsed.data.conversationId)) {
+        throw new AppError("CONFLICT", "An answer is already being generated in this conversation.", { retryable: true });
+      }
 
       const controller = new AbortController();
       let finished = false;

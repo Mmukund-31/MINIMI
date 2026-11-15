@@ -1,5 +1,5 @@
 import { newId } from "../shared/ids";
-import { containsNormalized, normalizeForMatch, subjectMatches } from "../shared/text";
+import { containsNormalized, normalizeForMatch, subjectMatches, subjectTokens } from "../shared/text";
 import type { Evidence, HistoricalClaim, MemoryExchange, Source, SourceKind } from "../shared/types";
 import { extractNumbers } from "./price";
 import type { EvidenceExtraction, Plan } from "./schemas";
@@ -73,6 +73,28 @@ export function quoteFound(text: string, quote: string): boolean {
 }
 
 const PLAN_FILLER = new Set(["plan", "plans", "tier", "the", "edition", "package", "subscription"]);
+/** Words too generic to identify a vendor on their own. */
+const GENERIC_SUBJECT = new Set(["crm", "cloud", "hub", "sales", "database", "postgres", "postgresql", "hosting", "pro", "plan", "app", "ai", "software"]);
+
+/** Does `text` mention the vendor/product? (Any distinctive name token.) Unknown/generic names pass. */
+export function textMentionsSubject(text: string, subject: string): boolean {
+  const toks = subjectTokens(subject).filter((t) => t.length >= 3 && !GENERIC_SUBJECT.has(t));
+  if (toks.length === 0) return true;
+  const hay = normalizeLoose(text);
+  return toks.some((t) => hay.includes(t));
+}
+
+/** Does the price belong to the named plan? Quote names the plan, or the plan name is followed by that price in the source. */
+export function planAttributionVerified(src: string, quote: string, attribute: string, value: string, subject: string): boolean {
+  const brand = new Set(subjectTokens(subject));
+  const core = normalizeLoose(attribute)
+    .split(" ")
+    .filter((t) => t && !brand.has(t) && !PLAN_FILLER.has(t));
+  if (core.length === 0) return false;
+  const q = ` ${normalizeLoose(quote)} `;
+  if (core.every((t) => q.includes(` ${t} `))) return true;
+  return locatePriceSpan(src, attribute, value, subject) !== null;
+}
 
 /**
  * Deterministic quote recovery for paraphrased price findings. Looks for the
@@ -140,11 +162,13 @@ export function validateEvidence(extraction: EvidenceExtraction, sources: Source
   const rejected: ValidationReport["rejected"] = [];
   const seen = new Set<string>();
 
-  const check = (sourceId: string, quote: string, value: string): string | null => {
+  const check = (sourceId: string, quote: string, value: string, subject: string): string | null => {
     const src = byId.get(sourceId.trim().toUpperCase());
     if (!src) return "unknown source id";
     if (normalizeForMatch(quote).length < 8) return "quote too short";
     if (!quoteFound(sourceText(src), quote)) return "quote not found in source";
+    // Entity check: the page must be about this vendor at all (title, URL or text).
+    if (!textMentionsSubject(`${sourceText(src)} ${src.url}`, subject)) return "source does not mention the subject";
     const nums = extractNumbers(value).filter((n) => n !== 0);
     const quoteNums = new Set(extractNumbers(quote));
     if (nums.length > 0 && !nums.some((n) => quoteNums.has(n))) return "value not supported by quote";
@@ -173,13 +197,13 @@ export function validateEvidence(extraction: EvidenceExtraction, sources: Source
 
   for (const f of extraction.findings) {
     let quote = f.quote;
-    let reason = check(f.sourceId, quote, f.value);
+    let reason = check(f.sourceId, quote, f.value, f.subject);
     let repaired = false;
+    const src = byId.get(f.sourceId.trim().toUpperCase());
     if (reason === "quote not found in source" && f.category === "pricing") {
       // The model paraphrased. Try to recover the genuine span from the source itself.
-      const src = byId.get(f.sourceId.trim().toUpperCase());
       const span = src ? locatePriceSpan(sourceText(src), f.attribute, f.value, f.subject) : null;
-      if (span && !check(f.sourceId, span, f.value)) {
+      if (span && !check(f.sourceId, span, f.value, f.subject)) {
         quote = span;
         reason = null;
         repaired = true;
@@ -198,10 +222,11 @@ export function validateEvidence(extraction: EvidenceExtraction, sources: Source
       quote,
       sourceId: f.sourceId,
       ...(repaired ? { quoteRepaired: true } : {}),
+      ...(f.category === "pricing" ? { planVerified: planAttributionVerified(sourceText(src!), quote, f.attribute, f.value, f.subject) } : {}),
     });
   }
   for (const u of extraction.updates) {
-    const reason = check(u.sourceId, u.quote, "");
+    const reason = check(u.sourceId, u.quote, "", u.subject);
     if (reason) {
       rejected.push({ reason, sourceId: u.sourceId, value: u.title, quote: u.quote });
       continue;

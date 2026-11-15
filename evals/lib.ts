@@ -162,7 +162,16 @@ function changeMetrics(got: Comparison[], expected: ChangeStatus[]): Metrics["ch
   return m;
 }
 
-export function pricingScenario(id: string, description: string, claims: HistoricalClaim[], evidence: Evidence[], expected: ChangeStatus[], category: Category = "pricing"): Scenario {
+export function pricingScenario(
+  id: string,
+  description: string,
+  claims: HistoricalClaim[],
+  evidence: Evidence[],
+  expected: ChangeStatus[],
+  category: Category = "pricing",
+  /** Optional expected dimension per row (price_amount, pricing_model, ...). */
+  dimensions?: string[],
+): Scenario {
   return {
     id,
     category,
@@ -171,6 +180,9 @@ export function pricingScenario(id: string, description: string, claims: Histori
       const got = comparePricing(claims, evidence);
       const statuses = got.map((c) => c.status);
       const failures = JSON.stringify(statuses) === JSON.stringify(expected) ? [] : [`statuses ${JSON.stringify(statuses)} ≠ ${JSON.stringify(expected)}: ${got.map((c) => c.explanation).join(" / ")}`];
+      if (dimensions && JSON.stringify(got.map((c) => c.dimension)) !== JSON.stringify(dimensions)) {
+        failures.push(`dimensions ${JSON.stringify(got.map((c) => c.dimension))} ≠ ${JSON.stringify(dimensions)}`);
+      }
       return ok(failures, { change: changeMetrics(got, expected), status: { correct: statuses.filter((s, i) => s === expected[i]).length, total: expected.length } });
     },
   };

@@ -117,9 +117,23 @@ export interface Evidence {
   significance?: "major" | "minor";
   /** True when the model paraphrased and the quote was recovered verbatim from the source by locatePriceSpan. */
   quoteRepaired?: boolean;
+  /** Pricing only: the price was tied to the named plan (plan named in the quote, or plan name followed by this price in the source). */
+  planVerified?: boolean;
 }
 
 export type ChangeStatus = "changed" | "unchanged" | "uncertain" | "not_comparable";
+
+/**
+ * Which aspect a comparison row is about, so "changed" is never ambiguous:
+ *  price_amount       same plan, same terms: the number itself
+ *  pricing_model      flat subscription ↔ usage-based (or a different meter)
+ *  billing_terms      period / billing cycle / per-seat vs total differ, so no monetary verdict
+ *  currency           different currencies, so no monetary verdict
+ *  plan_availability  the plan wasn't found among current plans
+ *  feature            product launches / feature changes
+ *  evidence           no usable or conflicting evidence
+ */
+export type ComparisonDimension = "price_amount" | "pricing_model" | "billing_terms" | "currency" | "plan_availability" | "feature" | "evidence";
 
 export interface Comparison {
   subject: string;
@@ -128,6 +142,7 @@ export interface Comparison {
   previousValue?: string;
   currentValue?: string;
   status: ChangeStatus;
+  dimension: ComparisonDimension;
   explanation: string;
   /** Evidence ids supporting the current value. */
   evidenceIds: string[];

@@ -29,7 +29,7 @@ const PLAN_UNITS = new Set([
 ]);
 
 /** Adjectives that can precede a plan unit ("per granted seat", "per active user"). */
-const UNIT_ADJECTIVES = new Set(["granted", "active", "additional", "extra", "paid", "licensed", "named", "full", "core", "monthly", "annual", "each"]);
+const UNIT_ADJECTIVES = new Set(["calendar", "granted", "active", "additional", "extra", "paid", "licensed", "named", "full", "core", "monthly", "annual", "each"]);
 
 function detectUsageUnit(s: string): string | null {
   for (const m of s.matchAll(/(?:\bper\b|\/)\s*((?:\d+(?:[.,]\d+)?\s*[km]?\s+)?(?:[a-z][a-z0-9-]*\s+){0,2}[a-z][a-z0-9-]*)/g)) {

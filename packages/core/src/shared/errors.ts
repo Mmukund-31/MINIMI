@@ -12,6 +12,7 @@ export type ErrorCode =
   | "BUDGET_EXCEEDED"
   | "TIMEOUT"
   | "CANCELLED"
+  | "CONFLICT"
   | "INTERNAL";
 
 export class AppError extends Error {
@@ -36,6 +37,8 @@ function defaultStatus(code: ErrorCode): number {
       return 400;
     case "NOT_FOUND":
       return 404;
+    case "CONFLICT":
+      return 409;
     case "NOT_CONFIGURED":
       return 503;
     case "LLM_RATE_LIMIT":

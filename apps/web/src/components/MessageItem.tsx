@@ -76,6 +76,11 @@ export function AssistantMessage({ message, onFollowUp, isLast }: { message: Mes
   return (
     <div className="space-y-4">
       {m.seeded && <div className="text-[11px]"><span className="rounded bg-violet-100 px-1 font-medium text-violet-700 dark:bg-violet-950 dark:text-violet-300">seeded demo</span></div>}
+      {m.status === "error" && (
+        <div className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+          <AlertTriangle className="h-3.5 w-3.5" /> Interrupted answer: may be incomplete. Send the question again to retry.
+        </div>
+      )}
       <Markdown text={message.content} sources={sources} />
       {m.comparisons && m.comparisons.length > 0 && <ComparisonTable comparisons={m.comparisons} sources={sources} />}
       <SourceList sources={sources} />

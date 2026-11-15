@@ -42,3 +42,40 @@ Status as of 2026-11-15. All phases completed. Commands below were run on Window
 - No live factual-accuracy grading → build a hand-checked answer key.
 - `npm audit`: 7 moderate advisories in dev-only lint tooling (typescript-eslint dependency chain); no runtime exposure.
 - Anthropic adapter: unit-level contract only; live validation pending an API key in `.env` (`LLM_SYNTHESIS_PROVIDER=anthropic npm run eval:live -- --only=demo-postgres`).
+
+---
+
+## Review round 2 (2026-11-15): independent audit and fixes
+
+The baseline at the start was green (117 tests, 49/49 offline evals). The audit found the defects below, verified empirically before fixing. Each fix has regression tests.
+
+| # | Defect | Fix | Files |
+|---|---|---|---|
+| 1 | Look-alike subdomains (`neon.selfhost.dev`) classed as official | official = registrable domain; model domain hints filtered (no review/aggregator sites) | `search/ranking.ts` |
+| 2 | Evidence accepted from pages about a different vendor | entity check: source must mention the vendor | `research/evidence.ts` |
+| 3 | Price not tied to the named plan | `planVerified` (plan named in quote, or plan name followed by that price); unverified prices can't prove "changed" | `research/evidence.ts`, `change-detector.ts` |
+| 4 | "Google Cloud SQL" ≈ "Google Workspace" | token-subset subject matching | `shared/text.ts` |
+| 5 | Old pages could prove a change "since" | historical cutoff on publication date | `change-detector.ts` |
+| 6 | Stale/off-topic pages not demoted | title-year staleness and relevance penalties | `search/ranking.ts` |
+| 7–8 | Flat → usage not a pricing-model change; no change dimensions | `dimension` on every row; pricing-model verdict with official confirmation; UI shows it | `types.ts`, `change-detector.ts`, prompts, UI |
+| 9 | Live eval checked grounding only | ground truth (provisional, quoted), grader (correct/abstained/wrong/missing), structural checks, run history, `--from` re-render | `evals/grading.ts`, `evals/live-runner.ts`, `evals/ground-truth.json` |
+| 10 | Partial answers lost on failure/cancel | persisted with `status: error`, retry reuses the question, partial hidden from model | `orchestrator.ts`, UI |
+| 11 | Concurrent turns in one conversation | per-conversation lock → HTTP 409 | `orchestrator.ts`, `routes/chat.ts` |
+| 12 | `evals/REPORT.md` changed on every run | deterministic report; CI checks it's committed up to date | `evals/runner.ts`, CI |
+| 13 | No CI, long DESIGN.md, no screenshots | GitHub Actions (Ubuntu Node 22/24, Windows Node 24); DESIGN.md ≈ 640 words; README rewritten with screenshots | `.github/workflows/ci.yml`, docs |
+
+Found by live testing during this round (all fixed, with tests): no official sources returned by open search → vendor-domain-first search with open fallback; JS-rendered official pages → focused excerpts; nondeterministic source-slot allocation; extractor skipping renamed plans; `per calendar month` parsed as usage; citation format variants (`[5]`, `[ S3 S7 ]`); uncited verified facts; planner invalid JSON → escalation; empty extraction → nudged retry; rate-limited extraction model → fallback; cancellation not checked between stages.
+
+### Test log (end of round 2)
+
+- `npm test`: 152 passed (13 files)
+- `npm run eval`: 53/53 (report stable across runs)
+- `npm run typecheck`, `npm run lint`: clean
+- Live: 9 graded complete runs → 38 correct / 22 abstained / **0 wrong** / 3 missing (provisional ground truth); details in `docs/evaluation.md`
+
+### Outstanding
+
+- Human confirmation of `evals/ground-truth.json` entries (set `review` to `human-confirmed`).
+- Re-run `npm run eval:live` after the Groq daily quota resets: the final citation and grader fixes are verified offline only.
+- Retake the 3-November and Postgres screenshots (removed because they showed since-fixed citation glitches).
+- Your local `.env` still has `MAX_SEARCHES=6`. The new default is 14 (see `.env.example`).

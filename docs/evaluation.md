@@ -1,80 +1,85 @@
 # Evaluation
 
-Two separate suites, both reproducible from the repo:
-
 | Suite | Command | Network | Purpose |
 |---|---|---|---|
-| Offline | `npm run eval` | none | Regression-tests the deterministic machinery (dates, retrieval, ranking, validation, comparison, citation filtering, degradation) under known, including adversarial, model outputs. |
-| Live | `npm run eval:live` | Groq + Tavily | Runs the official prompts end-to-end with real models and real search, and checks grounding automatically. |
-
-The test suite (`npm test`, 117 tests) is separate and also offline.
+| Tests | `npm test` | none | 152 unit + integration tests (Fastify inject, deterministic test doubles) |
+| Offline eval | `npm run eval` | none | 53 scenarios that pin down the deterministic machinery under known, including adversarial, model outputs → [evals/REPORT.md](../evals/REPORT.md) |
+| Live eval | `npm run eval:live` | Groq + Tavily | the 3 official prompts + 2 controls end-to-end, graded against ground truth → [evals/LIVE_REPORT.md](../evals/LIVE_REPORT.md) |
 
 ## Offline results (actual)
 
-Full table: [evals/REPORT.md](../evals/REPORT.md) (regenerated on every run).
+**53/53 scenarios pass** (temporal 8, memory 8, web research 5, pricing 15, product updates 4, multi-turn 3, uncertainty 3, adversarial 8, incl. the 3 demos). Full metrics are in [evals/REPORT.md](../evals/REPORT.md), which is deterministic, so CI fails if it goes stale.
 
-**49/49 scenarios passed**:
+The scenarios were written alongside the code to pin down the behaviors in the brief, so 100% means "the specified behavior holds". It is not a benchmark of model quality. Examples:
+- flat → usage-based on an official page is a `pricing_model` change (P08);
+- the same rate on a third-party page only is `uncertain` (P09);
+- a usage add-on next to the old flat price is not a model change (P10);
+- a different price on a page published before the conversation is not "changed since" (P11);
+- a price not tied to the plan blocks "changed" (P12);
+- per-seat vs team total is `not_comparable` (P07);
+- planted hallucinated source ids and fabricated quotes never survive (A02);
+- injected instructions in results are quarantined (A01).
 
-| Category | Scenarios |
+## Live evaluation design
+
+Each live case is checked two ways.
+
+**1. Automatic checks (pass/fail, no ground truth needed):**
+- **Completed:** the answer finished without error.
+- **Historical conversation:** the expected seeded conversation was retrieved (date resolution and memory).
+- **Searched when expected:** research questions search; small talk doesn't.
+- **Citations:** every `[S#]` in the answer resolves to a retrieved source, and research answers cite something.
+- **Entities covered:** every vendor from the earlier conversation gets a comparison row.
+- **Structural** ([evals/grading.ts](../evals/grading.ts)):
+  - no `changed`/`unchanged` verdict without an official source or an explicit third-party qualification (source authority);
+  - no amount change across different currency, period, billing, per-seat or usage unit (compatibility);
+  - no `changed` resting on a page published before the conversation (historical cutoff).
+- **Plan attribution rate (reported):** the share of pricing evidence whose price is tied to the named plan (quote-to-claim relevance).
+
+**2. Ground-truth grading** against [evals/ground-truth.json](../evals/ground-truth.json). Each entry quotes the vendor's official page. It was fetched automatically on 2026-11-15 and is **marked `provisional` until a person opens the page and sets `review: "human-confirmed"`**; reports label grades "provisional" until then. Entries whose price wasn't visible in the page text (Render, Zoho, Pipedrive, and Copilot Business/Enterprise) carry no expectation and are reported as *ungraded*, never guessed. Grades:
+
+| Grade | Meaning |
 |---|---|
-| Temporal reasoning | 8 |
-| Memory retrieval | 8 (incl. official demo 2) |
-| Web research | 5 |
-| Pricing comparison | 10 (incl. official demos 1 and 3) |
-| Product updates | 4 |
-| Multi-turn follow-ups | 3 |
-| Uncertainty and contradiction | 3 |
-| Adversarial | 8 |
-
-| Metric | Value |
-|---|---|
-| Memory retrieval precision / recall | 100% / 100% (6 TP, 0 FP, 0 FN) |
-| Date-resolution accuracy | 8/8 (incl. ambiguity flags and timezone edge) |
-| Comparison status accuracy | 34/34 |
-| Change-detection precision / recall | 100% / 100% (5 TP, 0 FP, 0 FN) |
-| Citation correctness | 23/23 citations in final answers resolve to retrieved sources |
-| Planted fabrications surviving validation | 0/4 |
-| Searches per request | avg 3.3, max 10 |
-| Unexpected error rate | 0% |
-
-**How to read these numbers.** The scenarios were written alongside the code to pin down the behaviors in the brief, so 100% means "the specified behavior holds". It is not an independent benchmark. The model outputs are scripted, so these numbers say nothing about how well a real model extracts evidence; the live suite covers that.
-
-Adversarial cases covered: prompt injection inside a result, hallucinated source ids, fabricated quotes, invented historical claims, invalid structured output at every stage, every search timing out, missing publication dates, a stale article ranked first by the provider, duplicate URLs with tracking parameters, an official page unavailable (third-party only), conflicting official prices, rate-limit errors during the answer, invented URLs and citations in the answer.
+| correct | the status (and, for "changed", the dimension) matches |
+| abstained | `uncertain` / `not_comparable` where a verdict was possible: honest but unhelpful |
+| wrong | a confident verdict ground truth contradicts, or a ruled-out status (e.g. "unchanged" for Salesforce "Enterprise", which no longer exists) |
+| missing | no comparison row for that vendor and plan |
 
 ## Live results (actual)
 
-Last run: Groq `openai/gpt-oss-20b` (analysis, planning, answer) + `openai/gpt-oss-120b` (evidence extraction), Tavily search, fresh seeded database, search cache disabled. Full answers and sources: [evals/LIVE_REPORT.md](../evals/LIVE_REPORT.md).
+Across the **9 graded, complete live runs** on 2026-11-15 (09:57–10:42 UTC; table in [evals/LIVE_REPORT.md](../evals/LIVE_REPORT.md#run-history)):
 
-| Case | Auto checks | Latency | LLM calls | Searches | Tokens | Evidence kept / rejected |
-|---|---|---|---|---|---|---|
-| Demo 1: CRM shortlist | pass | 15.5 s | 4 | 10 | 12,878 | 6 / 1 |
-| Demo 2: 3 November | pass | 11.5 s | 4 | 3 | 13,586 | 13 / 1 |
-| Demo 3: Postgres hosting | pass | 47.4 s* | 4 | 5 | 11,675 | 5 / 0 |
-| Control: plain research | pass | 20.4 s | 4 | 1 | 5,853 | 3 / 2 |
-| Control: small talk | pass | 1.5 s | 2 | 0 | 1,951 | 0 / 0 |
+| Correct | Abstained | Wrong | Missing |
+|---|---|---|---|
+| 38 | 22 | **0** | 3 |
 
-\* Ran immediately after two research questions, so it waited for Groq's per-minute token limit to reset. Re-run in isolation: **13.7 s**. The stage timings were analyze 1.1 s, plan 1.1 s, search 7.4 s, evidence 2.0 s, answer 2.0 s, so web search dominates, not the model.
+The system never gave a confident verdict that the (provisional) ground truth contradicts. Its errors were abstentions: "uncertain" when the evidence was thin. The 3 "missing" came from one run where the planner failed before planner escalation existed. Per-run results vary (2–6 correct out of 7 gradable) because search results and model outputs vary.
 
-Automatic checks: completed without error; retrieved the expected seeded conversation; searched when (and only when) expected; every `[S#]` resolves to a retrieved source; research answers cite something. **Factual accuracy of current prices is not auto-graded, and the cited pages were not opened by hand for this report.** The values the agent reported (Supabase Pro $25/month, Render Basic-1gb $19/month, Railway Hobby $5/month, Copilot Business $19 and Enterprise $39 per user/month, Neon Launch at $0.106 per CU-hour) are consistent with these vendors' publicly listed pricing as known to the author. Verify against the sources listed in the live report.
+[evals/LIVE_REPORT.md](../evals/LIVE_REPORT.md) shows the most recent complete run (10:42 UTC) in full, including answers, comparison tables with dimensions, and sources. It was **re-rendered from the saved run** with the current grader (`npm run eval:live -- --from=<file>`). In that run 4 of 5 cases used the fallback extractor because `gpt-oss-120b`'s daily quota was exhausted.
+
+**Not live-validated:** the final fixes made after 10:42 UTC. These are citation separators (`[ S3 S7 ]`), price-only citation repair, and vendor matching across subject and plan in the grader. All have offline tests. They couldn't be validated live because both Groq models' daily token quotas (200K/day measured for 120b) were exhausted by the day's evaluation runs. The 10:52 run in the history shows the agent's behavior when every model is out of quota: a clear `LLM_RATE_LIMIT` message, no crash. Re-run `npm run eval:live` after the quota resets.
 
 ## Failures found by live testing, and the fixes
 
-Live runs surfaced problems the offline suite could not. Each is now covered by a regression test or scenario.
+Each fix has a regression test or scenario.
 
 | Live failure | Root cause | Fix |
 |---|---|---|
-| Answers had no clickable citations | Model wrote `[ S4 ]`, `【S4】`, `【S2‑S3】` | Citation filter normalizes spacing, fullwidth brackets, `†` suffixes and ranges |
-| 66–75 s latency | Groq free tier is 8K tokens/min per model; one request used ~12K | Split roles across two models (separate rate-limit buckets) |
-| "$190/month" vs "$19 per seat" marked **changed** | Planner extracted a derived team total; comparator allowed per-seat vs flat | Prompt forbids derived figures; comparator: per-seat vs total → `not_comparable` |
-| "$19/month" vs "$0.106 per CU-hour" marked **changed** | Usage-based units not recognized | Price parser detects metered units; flat vs metered → `not_comparable` |
-| "Updates: none found" when none were searched | Planner spent the budget on prices | Code guarantees one update search per vendor when asked; unsearched rows say "Not checked" |
-| Many good findings rejected | Extractor paraphrased quotes / joined table cells | Punctuation-insensitive matching plus a guarded span recovery (plan name followed by the same price) |
-| All rows "uncertain" in one run | Planner put the price in the plan field or the plan in the subject | Deterministic claim normalization and vendor-aware plan matching |
-| AWS RDS "$0.016/hour (~$12/month)" read as monthly | Period taken from the parenthetical | Period now bound to the matched amount |
-| "Pipedrive unchanged" based on a page titled "…in 2024" | Stale third-party page without a publish date | Stale-year detection, so such evidence alone yields `uncertain` |
+| No official sources at all in some runs | open web search returned only third-party roundups | vendor-domain-first pricing search, open web if no visible prices or budget remains |
+| Official pages yielded no evidence | prices sit deep in the page; truncation kept the navigation | query-focused verbatim excerpts around prices and plan names |
+| Pricing sources crowded out | slot allocation depended on which search finished first | deterministic, pricing-first source allocation |
+| Neon flat → usage reported "not comparable" / "sources disagree" | no pricing-model dimension; differing usage rates counted as a conflict | `dimension` on every row; model-change verdict with official confirmation; rate spread noted |
+| Salesforce "Enterprise" undetectable | extractor skipped plans whose names differ from the claims | extract all plans; code matches plans and reports plan availability |
+| "$10 per calendar month" read as usage-based | "calendar" parsed as a meter | plan-period adjectives |
+| `[5][6]`, `[ S4 ]`, `【S2‑S3】`, `[ S3 S7 ]` not linked | citation format variants | normalization in the streaming filter |
+| Verified facts stated without citations | answer model omitted them | deterministic citation repair (price amounts only) |
+| Planner produced invalid JSON twice → one generic search | small model on a large schema | one escalation to the extraction model |
+| Extraction empty despite visible prices | intermittent model output | one nudged retry |
+| Extraction impossible when 120b is rate-limited | quotas are per model | fallback to the fast model, noted in the answer |
+| Earlier rounds: "$190 for 10 seats" vs "$19/seat" = changed; flat vs per-CU-hour = changed; stale 2024 page as proof | comparator gaps | per-seat/usage/period compatibility, stale-page detection |
 
-## Known limitations of the evaluation
+## Limitations of the evaluation
 
-- The live suite has 5 cases, too few for statistical claims. Its value is catching integration failures like the ones above.
-- No automated grading of live factual accuracy. A next step is a hand-labeled answer key, refreshed periodically.
-- Live results vary run to run (search results and model sampling change). The report records the exact run.
+- 5 live cases is too few for statistical claims. The suite catches integration failures and tracks calibration (wrong vs abstained) across runs.
+- Ground truth is provisional until a person confirms each entry; several vendors couldn't be graded because their prices aren't in the fetched page text.
+- Groq free-tier quotas cap how many live runs fit in a day (about 4–5 full runs of 5 cases).

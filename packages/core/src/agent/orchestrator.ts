@@ -8,12 +8,12 @@ import { screenSources, validateEvidence, verifyHistoricalClaims } from "../rese
 import { AnalysisSchema, EvidenceExtractionSchema, PlanSchema, type Analysis, type Plan } from "../research/schemas";
 import type { CachedSearch } from "../search/cached";
 import { dedupeResults } from "../search/normalize";
-import { rankSources, type QueryPurpose, type SubjectHint } from "../search/ranking";
+import { rankSources, trustedDomainHint, type QueryPurpose, type SubjectHint } from "../search/ranking";
 import type { AppConfig } from "../shared/config";
 import { isValidTimezone } from "../shared/config";
 import { AppError, isAbortError, toAppError } from "../shared/errors";
 import { newId, nowIso } from "../shared/ids";
-import { truncate } from "../shared/text";
+import { subjectMatches, truncate } from "../shared/text";
 import type {
   AgentEvent,
   Comparison,
@@ -28,7 +28,7 @@ import type {
   Stage,
 } from "../shared/types";
 import { resolveTemporal, type TemporalResolution } from "../temporal/resolver";
-import { CitationFilter, finalizeAnswer, StreamUrlFilter } from "./citations";
+import { attachMissingCitations, CitationFilter, finalizeAnswer, StreamUrlFilter } from "./citations";
 import { buildSynthesisContext, formatClaims, formatMemory, formatRecent, formatSourcesForExtraction } from "./context";
 import { enforceRouting, followUpSuggestions, heuristicAnalysis, wantsUpdateCheck } from "./heuristics";
 import { finalizeSearchPlan, normalizeClaims, updateSearchedSubjects } from "../research/planner";
@@ -89,6 +89,10 @@ interface ExecutionState {
   searchRecords: SearchRecordInput[];
   evidence: Evidence[];
   comparisons: Comparison[];
+  /** Answer text streamed so far (kept if the run fails mid-answer). */
+  partial: string;
+  /** Client disconnect + execution deadline. Checked between stages. */
+  signal: AbortSignal;
 }
 
 /**
@@ -105,12 +109,36 @@ export class AgentOrchestrator {
   private readonly logger: Logger;
   private readonly retriever: MemoryRetriever;
 
+  /** Conversations with an answer currently being generated (single process). */
+  private readonly inFlight = new Set<string>();
+
   constructor(private readonly deps: AgentDeps) {
     this.logger = deps.logger ?? silentLogger;
     this.retriever = new MemoryRetriever(deps.repos.messages, deps.repos.conversations);
   }
 
+  isBusy(conversationId: string): boolean {
+    return this.inFlight.has(conversationId);
+  }
+
+  /**
+   * One answer at a time per conversation: concurrent turns would interleave
+   * history and each would see the other's half-finished state.
+   */
   async run(input: RunInput, emit: (e: AgentEvent) => void): Promise<Message> {
+    const id = input.conversationId;
+    if (id) {
+      if (this.inFlight.has(id)) throw new AppError("CONFLICT", "An answer is already being generated in this conversation.", { retryable: true });
+      this.inFlight.add(id);
+    }
+    try {
+      return await this.runUnlocked(input, emit);
+    } finally {
+      if (id) this.inFlight.delete(id);
+    }
+  }
+
+  private async runUnlocked(input: RunInput, emit: (e: AgentEvent) => void): Promise<Message> {
     const { config, repos } = this.deps;
     const started = Date.now();
 
@@ -149,12 +177,15 @@ export class AgentOrchestrator {
       searchRecords: [],
       evidence: [],
       comparisons: [],
+      partial: "",
+      signal,
     };
     repos.research.startSession({ id: state.id, conversationId: conversation.id, userMessageId: userMessage.id, query: text });
     const log = (obj: object, msg: string) => this.logger.info({ executionId: state.id, ...obj }, msg);
 
     try {
-      const recent = repos.messages.recent(conversation.id, 8, userMessage.id);
+      // Interrupted partial answers are kept for the user but never fed back to the model as context.
+      const recent = repos.messages.recent(conversation.id, 8, userMessage.id).filter((m) => m.metadata.status !== "error");
 
       // ── temporal (deterministic, first pass on raw text) ─────────────
       await this.stage(state, "temporal", emit, async () => {
@@ -172,7 +203,7 @@ export class AgentOrchestrator {
               system: ANALYZE_SYSTEM,
               prompt: analyzePrompt({ message: text, recent: formatRecent(recent, 3000), nowLocal: state.nowLocal }),
               promptVersion: PROMPT_VERSIONS.analyze,
-              maxTokens: 2048,
+              maxTokens: 1536,
               signal,
             },
             state.tracker,
@@ -281,6 +312,24 @@ export class AgentOrchestrator {
       const appErr = toAppError(err);
       repos.research.finishSession(state.id, appErr.code === "CANCELLED" ? "cancelled" : "failed", null, appErr.code);
       this.logger.error({ executionId: state.id, code: appErr.code, err: describeErr(err) }, "execution failed");
+      // Keep whatever the user already saw stream in, clearly marked as interrupted.
+      if (state.partial.trim()) {
+        try {
+          repos.messages.add({
+            conversationId: conversation.id,
+            role: "assistant",
+            content: state.partial,
+            metadata: {
+              executionId: state.id,
+              status: "error",
+              sources: state.sources.filter((s) => state.partial.includes(`[${s.id}]`)).map(toSourceRef),
+              notes: [`This answer was interrupted (${appErr.code === "CANCELLED" ? "stopped" : appErr.message}) and may be incomplete.`],
+            },
+          });
+        } catch (persistErr) {
+          this.logger.error({ executionId: state.id, err: describeErr(persistErr) }, "failed to persist partial answer");
+        }
+      }
       throw appErr;
     }
   }
@@ -304,10 +353,15 @@ export class AgentOrchestrator {
           wantsPricing: state.analysis.asksAboutPricing,
           wantsUpdates: state.analysis.asksAboutProductUpdates,
         });
-        state.plan = await llm.generateStructured(
-          { schema: PlanSchema, schemaName: "research_plan", system: p.system, prompt: p.prompt, promptVersion: PROMPT_VERSIONS.plan, maxTokens: 4096, signal },
-          state.tracker,
-        );
+        const planReq = { schema: PlanSchema, schemaName: "research_plan", system: p.system, prompt: p.prompt, promptVersion: PROMPT_VERSIONS.plan, maxTokens: 3072, signal };
+        try {
+          state.plan = await llm.generateStructured(planReq, state.tracker);
+        } catch (err) {
+          // Escalate once to the stronger extraction model if the fast model can't produce a valid plan.
+          if (!(err instanceof AppError) || err.code !== "LLM_INVALID_OUTPUT" || state.tracker.remainingLlmCalls() <= 3) throw err;
+          this.logger.warn({ executionId: state.id, err: describeErr(err) }, "plan invalid on fast model; escalating to extract model");
+          state.plan = await llm.generateStructured({ ...planReq, role: "extract" }, state.tracker);
+        }
       } catch (err) {
         if (isAbortError(err)) throw err;
         this.logger.warn({ executionId: state.id, err: describeErr(err) }, "planning failed; using fallback plan");
@@ -333,21 +387,57 @@ export class AgentOrchestrator {
     // search (the single tool), bounded concurrency
     await this.stage(state, "search", emit, async () => {
       const results: SearchResult[] = [];
-      const queue = [...plan.searches];
+      // Official-domain-first: when the vendor's domain is known, search it directly so the
+      // vendor's own pricing page / changelog is in the evidence pool (open web search often
+      // returns only third-party roundups). If that finds nothing, fall back to an open search.
+      const domainFor = (subject: string | null): string | null => {
+        if (!subject) return null;
+        const hint = plan.subjects.find((x) => subjectMatches(x.name, subject))?.officialDomain;
+        return trustedDomainHint(hint);
+      };
+      // Domain-first applies to pricing only: update searches use the dated news index
+      // (vendor pages rarely carry publication dates), where official changelogs still rank first.
+      const queue: Array<{ s: (typeof plan.searches)[number]; domain: string | null }> = plan.searches.map((s) => ({
+        s,
+        domain: s.purpose === "pricing" ? domainFor(s.subject) : null,
+      }));
+      // Fallback searches run before update searches so price checks are never starved.
+      const openQueued = new Set<string>();
+      const enqueueFallback = (s: (typeof plan.searches)[number]) => {
+        if (openQueued.has(s.query)) return;
+        openQueued.add(s.query);
+        const firstUpdate = queue.findIndex((q) => q.s.purpose === "product_update");
+        queue.splice(firstUpdate < 0 ? queue.length : firstUpdate, 0, { s, domain: null });
+      };
+      // Any budget left after the plan: open-web versions of domain-restricted pricing searches,
+      // so a stale or wrong domain hint can't leave a vendor without evidence. Official pages
+      // still rank first; third-party results only fill gaps (and are labelled as such).
+      for (const q of [...queue]) {
+        if (q.domain) queue.push({ s: q.s, domain: null });
+      }
+      const openDone = new Set<string>();
       const worker = async () => {
         while (queue.length > 0) {
-          const s = queue.shift()!;
+          const { s, domain } = queue.shift()!;
+          // Each open-web query runs at most once (a fallback may have moved it earlier).
+          if (!domain) {
+            if (openDone.has(s.query)) continue;
+            openDone.add(s.query);
+          }
           if (!state.tracker.canSearch()) break;
           state.tracker.beginSearch();
-          emit({ type: "search", query: s.query, status: "start" });
+          const label = domain ? `${s.query} · ${domain}` : s.query;
+          emit({ type: "search", query: label, status: "start" });
           const retrievedAt = nowIso();
           try {
             const isUpdate = s.purpose === "product_update";
             const out = await this.deps.search!.search(s.query, {
               maxResults: config.budgets.maxResultsPerSearch,
               recency: isUpdate ? "month" : undefined,
-              topic: isUpdate ? "news" : "general",
-              depth: isUpdate ? "basic" : "advanced",
+              // Vendor sites aren't in the news index, so domain-restricted searches use the general topic.
+              topic: isUpdate && !domain ? "news" : "general",
+              depth: isUpdate && !domain ? "basic" : "advanced",
+              includeDomains: domain ? [domain] : undefined,
               signal,
             });
             if (out.cached) state.tracker.cacheHits++;
@@ -358,9 +448,12 @@ export class AgentOrchestrator {
               retrievedAt,
               status: out.cached ? "cached" : "ok",
               resultCount: out.results.length,
-              metadata: { purpose: s.purpose, subject: s.subject, urls: out.results.map((r) => r.url) },
+              metadata: { purpose: s.purpose, subject: s.subject, includeDomains: domain ? [domain] : [], urls: out.results.map((r) => r.url) },
             });
-            emit({ type: "search", query: s.query, status: out.cached ? "cached" : "done", resultCount: out.results.length });
+            emit({ type: "search", query: label, status: out.cached ? "cached" : "done", resultCount: out.results.length });
+            // Official pages often render prices with JavaScript: if none are visible, also search the open web.
+            const visiblePrice = out.results.some((r) => /[$€£₹¥]\s?\d/.test(`${r.snippet} ${r.content ?? ""}`));
+            if (domain && (out.results.length === 0 || !visiblePrice)) enqueueFallback(s);
           } catch (err) {
             if (isAbortError(err) && signal.aborted) throw err;
             const e = toAppError(err);
@@ -372,7 +465,8 @@ export class AgentOrchestrator {
               resultCount: 0,
               metadata: { purpose: s.purpose, error: e.message },
             });
-            emit({ type: "search", query: s.query, status: "failed", error: e.message });
+            emit({ type: "search", query: label, status: "failed", error: e.message });
+            if (domain) enqueueFallback(s);
             if (e.code === "NOT_CONFIGURED") throw e;
           }
         }
@@ -383,7 +477,8 @@ export class AgentOrchestrator {
 
       const purposeByQuery = new Map<string, QueryPurpose>(plan.searches.map((s) => [s.query, s.purpose]));
       const subjects: SubjectHint[] = plan.subjects.length ? plan.subjects : state.analysis.entities.map((name) => ({ name, officialDomain: null }));
-      const ranked = rankSources(dedupeResults(results), { subjects, purposeByQuery, maxSources: config.budgets.maxSources, now: state.now });
+      const subjectByQuery = new Map<string, string | null>(plan.searches.map((s) => [s.query, s.subject]));
+      const ranked = rankSources(dedupeResults(results), { subjects, purposeByQuery, subjectByQuery, maxSources: config.budgets.maxSources, now: state.now });
       const { usable, quarantined } = screenSources(ranked);
       if (quarantined.length) {
         state.notes.push(`${quarantined.length} search result(s) were excluded because they contained instructions aimed at AI systems.`);
@@ -406,24 +501,38 @@ export class AgentOrchestrator {
       }
       try {
         const subjects = plan.subjects.map((s) => s.name).join(", ") || state.analysis.entities.join(", ");
-        const extraction = await llm.generateStructured(
-          {
-            schema: EvidenceExtractionSchema,
-            schemaName: "evidence_extraction",
-            system: EVIDENCE_SYSTEM,
-            prompt: evidencePrompt({
-              question: state.analysis.standaloneQuestion || state.userMessage.content,
-              subjects,
-              claims: formatClaims(state.claims),
-              sources: formatSourcesForExtraction(state.sources, Math.floor(config.budgets.maxContextChars * 0.6)),
-            }),
-            promptVersion: PROMPT_VERSIONS.evidence,
-            maxTokens: 8192,
-            role: "extract",
-            signal,
-          },
-          state.tracker,
-        );
+        const prompt = evidencePrompt({
+          question: state.analysis.standaloneQuestion || state.userMessage.content,
+          subjects,
+          claims: formatClaims(state.claims),
+          sources: formatSourcesForExtraction(state.sources, Math.floor(config.budgets.maxContextChars * 0.6), [...plan.subjects.map((s) => s.name), ...state.claims.map((c) => c.attribute)]),
+        });
+        const extractWith = (p: string, role: "extract" | "fast") =>
+          llm.generateStructured(
+            { schema: EvidenceExtractionSchema, schemaName: "evidence_extraction", system: EVIDENCE_SYSTEM, prompt: p, promptVersion: PROMPT_VERSIONS.evidence, maxTokens: 4096, role, signal },
+            state.tracker,
+          );
+        // If the extraction model is rate-limited (per-minute or daily quota), fall back to the
+        // fast model, which has its own quota, rather than answering without evidence.
+        const extract = async (p: string) => {
+          try {
+            return await extractWith(p, "extract");
+          } catch (err) {
+            if (!(err instanceof AppError) || err.code !== "LLM_RATE_LIMIT" || !llm.hasDistinctModel("extract", "fast") || state.tracker.remainingLlmCalls() <= 2) throw err;
+            this.logger.warn({ executionId: state.id, err: describeErr(err) }, "extraction model rate-limited; falling back to fast model");
+            state.notes.push("The primary extraction model was rate-limited, so a smaller model extracted the evidence.");
+            return extractWith(p, "fast");
+          }
+        };
+        let extraction = await extract(prompt);
+        // Occasionally the extractor returns nothing although the sources visibly contain prices.
+        // One bounded retry with an explicit nudge (never when it would use the answer's reserved call).
+        const pricesVisible = state.sources.some((s) => /[$€£₹¥]\s?\d/.test(`${s.snippet} ${s.content ?? ""}`));
+        const wantsPrices = state.claims.some((c) => c.category === "pricing") || state.analysis.asksAboutPricing;
+        if (extraction.findings.length === 0 && wantsPrices && pricesVisible && state.tracker.remainingLlmCalls() > 2) {
+          this.logger.info({ executionId: state.id }, "empty extraction despite visible prices; retrying once");
+          extraction = await extract(`${prompt}\n\nNOTE: Several sources above contain prices. Extract every plan price stated for the subjects, each with a verbatim quote.`);
+        }
         const report = validateEvidence(extraction, state.sources);
         state.evidence = report.evidence;
         if (report.rejected.length) {
@@ -464,6 +573,7 @@ export class AgentOrchestrator {
     emit: (e: AgentEvent) => void,
   ): Promise<{ content: string; usedSources: Source[] }> {
     const t0 = Date.now();
+    state.signal.throwIfAborted();
     emit({ type: "stage", stage: "synthesize", status: "start" });
     const context = buildSynthesisContext({
       question: state.userMessage.content,
@@ -484,7 +594,7 @@ export class AgentOrchestrator {
     let raw = "";
     try {
       for await (const chunk of llm.streamText(
-        { system: SYNTHESIZE_SYSTEM, messages: [{ role: "user", content: context }], promptVersion: PROMPT_VERSIONS.synthesize, maxTokens: 4096, signal },
+        { system: SYNTHESIZE_SYSTEM, messages: [{ role: "user", content: context }], promptVersion: PROMPT_VERSIONS.synthesize, maxTokens: 3072, signal },
         state.tracker,
       )) {
         const out = urlGuard.push(filter.push(chunk));
@@ -499,6 +609,7 @@ export class AgentOrchestrator {
         emit({ type: "token", text: tail });
       }
     } catch (err) {
+      state.partial = finalizeAnswer(raw, state.sources.map((s) => s.url)).text;
       emit({ type: "stage", stage: "synthesize", status: "failed" });
       throw err;
     }
@@ -509,16 +620,20 @@ export class AgentOrchestrator {
     }
     state.stageMs.synthesize = Date.now() - t0;
     emit({ type: "stage", stage: "synthesize", status: "done" });
+    // Attach citations the model omitted for verified values (deterministic; see attachMissingCitations).
+    const content = attachMissingCitations(final.text, state.evidence);
+    const citedIds = new Set([...content.matchAll(/\[(S\d+)\]/g)].map((m) => m[1]!));
     // Sources list: cited ones first, then the others that informed comparisons.
-    const cited = state.sources.filter((s) => filter.used.has(s.id));
+    const cited = state.sources.filter((s) => citedIds.has(s.id));
     const compared = new Set(state.comparisons.flatMap((c) => c.sourceIds));
-    const rest = state.sources.filter((s) => !filter.used.has(s.id) && compared.has(s.id));
-    return { content: final.text, usedSources: [...cited, ...rest] };
+    const rest = state.sources.filter((s) => !citedIds.has(s.id) && compared.has(s.id));
+    return { content, usedSources: [...cited, ...rest] };
   }
 
   // ── helpers ─────────────────────────────────────────────────────────
 
   private async stage(state: ExecutionState, stage: Stage, emit: (e: AgentEvent) => void, fn: () => Promise<string | undefined>): Promise<void> {
+    state.signal.throwIfAborted(); // stop promptly after a client disconnect or deadline
     const t0 = Date.now();
     emit({ type: "stage", stage, status: "start" });
     try {
@@ -559,8 +674,12 @@ export class AgentOrchestrator {
   /** Persists the user message; a retry of an unanswered identical message reuses it. */
   private persistUserMessage(conversation: Conversation, text: string): Message {
     const { repos } = this.deps;
-    const last = repos.messages.recent(conversation.id, 1)[0];
+    // A retry of an unanswered (or interrupted) identical message reuses it instead of duplicating it.
+    const tail = repos.messages.recent(conversation.id, 2);
+    const last = tail.at(-1);
+    const prev = tail.length > 1 ? tail[0] : undefined;
     if (last && last.role === "user" && last.content === text) return last;
+    if (last?.role === "assistant" && last.metadata.status === "error" && prev?.role === "user" && prev.content === text) return prev;
     const msg = repos.messages.add({ conversationId: conversation.id, role: "user", content: text });
     if (conversation.title === "New conversation") {
       repos.conversations.rename(conversation.id, truncate(text.replace(/\s+/g, " "), 60));

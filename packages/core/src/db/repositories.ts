@@ -277,7 +277,7 @@ export class ResearchRepository {
           e.publishedAt ?? null,
           e.retrievedAt,
           e.strength,
-          JSON.stringify({ subject: e.subject, category: e.category, attribute: e.attribute, value: e.value, quote: e.quote, sourceKind: e.sourceKind, significance: e.significance, quoteRepaired: e.quoteRepaired }),
+          JSON.stringify({ subject: e.subject, category: e.category, attribute: e.attribute, value: e.value, quote: e.quote, sourceKind: e.sourceKind, significance: e.significance, quoteRepaired: e.quoteRepaired, planVerified: e.planVerified }),
         );
         link.run(input.messageId, e.id, e.sourceId);
       }

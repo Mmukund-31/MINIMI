@@ -8,6 +8,8 @@ export interface SearchOptions {
   topic?: "general" | "news";
   /** "advanced" returns richer page chunks (pricing tables); "basic" is cheaper. Default "advanced". */
   depth?: "basic" | "advanced";
+  /** Restrict results to these domains (used to reach the vendor's own pricing/changelog pages). */
+  includeDomains?: string[];
   signal?: AbortSignal;
 }
 

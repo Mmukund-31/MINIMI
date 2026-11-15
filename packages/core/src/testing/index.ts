@@ -20,6 +20,8 @@ export interface ScriptedLLMOptions {
   structured: Record<string, ScriptedResponse | ScriptedResponse[]>;
   /** Final answer text, or a function of the synthesis prompt. */
   synthesis: string | ((req: CompletionRequest) => string) | Error;
+  /** Simulate a provider failure part-way through streaming the answer. */
+  streamFailure?: { afterChars: number; error: Error };
   usage?: TokenUsage;
 }
 
@@ -49,6 +51,7 @@ export class ScriptedLLMProvider implements LLMProvider {
     const text = typeof s === "function" ? s(req) : s;
     // Emit in small uneven chunks to exercise the streaming citation filter.
     for (let i = 0; i < text.length; ) {
+      if (this.opts.streamFailure && i >= this.opts.streamFailure.afterChars) throw this.opts.streamFailure.error;
       const size = 3 + (i % 7);
       yield { type: "text", text: text.slice(i, i + size) };
       i += size;
@@ -84,9 +87,11 @@ export class FixtureSearchProvider implements SearchProvider {
     if (entry === "timeout") throw new AppError("SEARCH_TIMEOUT", "Search timed out (fixture).", { retryable: true });
     if (entry === "error") throw new AppError("SEARCH_ERROR", "Search failed (fixture).", { retryable: true });
     return entry
-      .slice(0, opts.maxResults)
       .map((r) => normalizeResult({ ...r, query }, { provider: this.name, query, retrievedAt: this.retrievedAt }))
-      .filter((r): r is SearchResult => r !== null);
+      .filter((r): r is SearchResult => r !== null)
+      // Honour include_domains like the real provider does.
+      .filter((r) => !opts.includeDomains?.length || opts.includeDomains.some((d) => r.sourceDomain === d || r.sourceDomain.endsWith(`.${d}`)))
+      .slice(0, opts.maxResults);
   }
 
   private lookup(query: string): FixtureEntry {

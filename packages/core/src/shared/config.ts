@@ -56,7 +56,7 @@ const EnvSchema = z.object({
   DATABASE_PATH: z.preprocess(emptyToUndefined, z.string().default("data/minimi.db")),
   SEED_DEMO_DATA: bool(true),
   LOG_LEVEL: z.preprocess(emptyToUndefined, z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info")),
-  MAX_SEARCHES: int(10, 1, 20),
+  MAX_SEARCHES: int(14, 1, 24),
   MAX_RESULTS_PER_SEARCH: int(5, 1, 20),
   MAX_SOURCES: int(12, 1, 40),
   SEARCH_TIMEOUT_MS: int(15_000, 1_000),

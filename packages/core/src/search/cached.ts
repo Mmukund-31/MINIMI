@@ -26,7 +26,7 @@ export class CachedSearch {
 
   static key(provider: string, query: string, opts: SearchOptions): string {
     return sha256(
-      JSON.stringify([provider, query.trim().toLowerCase().replace(/\s+/g, " "), opts.maxResults, opts.recency ?? null, opts.topic ?? "general", opts.depth ?? "advanced"]),
+      JSON.stringify([provider, query.trim().toLowerCase().replace(/\s+/g, " "), opts.maxResults, opts.recency ?? null, opts.topic ?? "general", opts.depth ?? "advanced", opts.includeDomains ?? []]),
     );
   }
 

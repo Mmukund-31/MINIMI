@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  attachMissingCitations,
   CitationFilter,
   finalizeAnswer,
   looksLikeInjection,
@@ -127,9 +128,9 @@ describe("verifyHistoricalClaims", () => {
 describe("CitationFilter (streaming)", () => {
   it("removes citations to unknown sources even when split across chunks", () => {
     const f = new CitationFilter(new Set(["S1", "S2"]));
-    const chunks = ["Price rose [S", "1]. Another [S9] claim [S2, S", "7]. Keep [1] and [see] as-is."];
+    const chunks = ["Price rose [S", "1]. Another [S9] claim [S2, S", "7]. Keep [1950] and [see] as-is; [2] is S2."];
     const out = chunks.map((c) => f.push(c)).join("") + f.flush();
-    expect(out).toBe("Price rose [S1]. Another  claim [S2]. Keep [1] and [see] as-is.");
+    expect(out).toBe("Price rose [S1]. Another  claim [S2]. Keep [1950] and [see] as-is; [S2] is S2.");
     expect([...f.used]).toEqual(["S1", "S2"]);
     expect(f.removed).toEqual(["S9", "S7"]);
   });
@@ -137,6 +138,8 @@ describe("CitationFilter (streaming)", () => {
     const f = new CitationFilter(new Set(["S1", "S4"]));
     const out = f.push("a [ S4 ] b 【S1】 c [S4†L10-L12] d [S1, S9]") + f.flush();
     expect(out).toBe("a [S4] b [S1] c [S4] d [S1]");
+    const h = new CitationFilter(new Set(["S3", "S7"]));
+    expect(h.push("rate [ S3 S7 ] here") + h.flush()).toBe("rate [S3][S7] here");
     const g = new CitationFilter(new Set(["S2", "S3"]));
     expect(g.push("see 【S2‑S3】 and [S2–S4].") + g.flush()).toBe("see [S2][S3] and [S2][S3].");
   });
@@ -166,5 +169,27 @@ describe("finalizeAnswer", () => {
     const r = finalizeAnswer("See [pricing](https://evil.example/x) and https://made-up.example/p. Real: https://vendor.com/pricing?utm_source=a", ["https://vendor.com/pricing"]);
     expect(r.text).toBe("See pricing and. Real: https://vendor.com/pricing?utm_source=a");
     expect(r.removedUrls).toEqual(["https://evil.example/x", "https://made-up.example/p"]);
+  });
+});
+
+describe("attachMissingCitations", () => {
+  const ev = [
+    { subject: "Supabase", value: "$25 / month", sourceId: "S3", category: "pricing" },
+    { subject: "Railway", value: "$5/month", sourceId: "S7", category: "pricing" },
+  ];
+  it("cites uncited sentences that state a verified value for the named subject", () => {
+    const out = attachMissingCitations("Supabase Pro is still $25 per month. Railway Hobby stays at $5. Neon moved to $0.106 per CU-hour.", ev);
+    expect(out).toBe("Supabase Pro is still $25 per month [S3]. Railway Hobby stays at $5 [S7]. Neon moved to $0.106 per CU-hour.");
+  });
+  it("ignores numbers that aren't written as prices", () => {
+    const copilot = [{ subject: "GitHub Copilot", value: "$10 USD per month", sourceId: "S4", category: "pricing" }];
+    expect(attachMissingCitations("You asked how much GitHub Copilot costs for a team of 10 developers?", copilot)).toBe(
+      "You asked how much GitHub Copilot costs for a team of 10 developers?",
+    );
+    expect(attachMissingCitations("GitHub Copilot Pro is still $10 a month.", copilot)).toBe("GitHub Copilot Pro is still $10 a month [S4].");
+  });
+  it("leaves already-cited sentences and mismatched numbers alone", () => {
+    expect(attachMissingCitations("Supabase is $25 [S1].", ev)).toBe("Supabase is $25 [S1].");
+    expect(attachMissingCitations("Supabase is $30 now.", ev)).toBe("Supabase is $30 now.");
   });
 });

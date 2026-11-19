@@ -1,6 +1,7 @@
 import { newId } from "../shared/ids";
 import { containsNormalized, normalizeForMatch, subjectMatches, subjectTokens } from "../shared/text";
 import type { Evidence, HistoricalClaim, MemoryExchange, Source, SourceKind } from "../shared/types";
+import { isPlanlessAttribute } from "./change-detector";
 import { extractNumbers } from "./price";
 import type { EvidenceExtraction, Plan } from "./schemas";
 
@@ -222,7 +223,10 @@ export function validateEvidence(extraction: EvidenceExtraction, sources: Source
       quote,
       sourceId: f.sourceId,
       ...(repaired ? { quoteRepaired: true } : {}),
-      ...(f.category === "pricing" ? { planVerified: planAttributionVerified(sourceText(src!), quote, f.attribute, f.value, f.subject) } : {}),
+      // A generic ("price") or meter ("compute") attribute names no plan, so it can never be plan-verified.
+      ...(f.category === "pricing"
+        ? { planVerified: !isPlanlessAttribute(f.attribute) && planAttributionVerified(sourceText(src!), quote, f.attribute, f.value, f.subject) }
+        : {}),
     });
   }
   for (const u of extraction.updates) {

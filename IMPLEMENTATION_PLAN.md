@@ -78,7 +78,7 @@ Found by live testing during this round (all fixed, with tests): no official sou
 - Human confirmation of `evals/ground-truth.json` entries (set `review` to `human-confirmed`).
 - Re-run `npm run eval:live` after the Groq daily quota resets: the final citation and grader fixes are verified offline only.
 - Retake the 3-November and Postgres screenshots (removed because they showed since-fixed citation glitches).
-- Your local `.env` still has `MAX_SEARCHES=6`. The new default is 14 (see `.env.example`).
+- ~~Your local `.env` still has `MAX_SEARCHES=6`. The new default is 14.~~ Superseded: the default is 10 everywhere since Round 3/4.
 
 ---
 
@@ -105,3 +105,30 @@ Found by live testing during this round (all fixed, with tests): no official sou
 - Set `TAVILY_API_KEY` again and run `npm run eval:live` once Groq's 120b daily quota resets; then `npm run eval:perf`.
 - Confirm each `provisional` ground-truth entry by opening the official page.
 - Retake the 3-November and Postgres screenshots after a live run.
+
+---
+
+## Round 4 (2026-11-19): submission verification
+
+| Area | Finding (live, real Groq + Tavily) | Change | Files |
+|---|---|---|---|
+| Config | `.env.example` still said `MAX_SEARCHES=14` | 10 everywhere (code default, `.env.example`, local `.env`) | `.env.example` |
+| Completeness | Copilot Pro reported as "also offered now" although the earlier answer named it; meters ("Compute", "Storage") listed as plans | offering skips plans mentioned in the earlier answer text (whole-phrase, "Pro" ≠ "Pro+") and plan-less/meter attributes | `research/change-detector.ts`, `agent/orchestrator.ts` |
+| Plan matching | extractor folded the plan into the subject ("Neon Launch" + "price") | plan-less attributes match via the subject; meters never plan-verified; prompt asks for plan as attribute | `change-detector.ts`, `research/evidence.ts`, `agent/prompts.ts` (evidence@6) |
+| Claims | planner extracted "Cost for 10 developers" | derived claims dropped in `normalizeClaims` | `research/planner.ts` |
+| Source authority | forum.cursor.com thread classified as official | user-generated hosts/paths on vendor domains are third-party | `search/ranking.ts` |
+| Answer | "Not checked" folded into "none found" | synthesis prompt rule (synthesize@8). Prompt-only: not followed in the final CRM run | `agent/prompts.ts` |
+| Ground truth | all quoted entries re-opened | agent-verified 2026-11-19; Copilot Business/Enterprise added; Zoho withdrawn (₹800 placeholder); Pipedrive/Render/AWS documented as not verifiable; Cursor control truth | `evals/ground-truth.json` |
+
+### Test log (end of round 4)
+
+- Clean `npm ci` → `typecheck` 0 errors → `lint` clean → `test` 177/177 → `eval` 54/54 (REPORT.md unchanged) → `build` OK
+- Live (`npm run eval:live`, 3 runs): 3/4/0/1 → 7/1/0/0 → **8 correct / 1 abstained / 0 wrong / 0 missing**, 5/5 auto checks (provisional ground truth)
+- Hand-graded: Cursor control incomplete (omits that Pro is legacy); Postgres prose overstates the timing of Neon's change
+- CI: success on `801250e`. Round-4 changes are **uncommitted** (owner commits manually), so CI hasn't run on them
+- Screenshots `crm.png`, `home.png`, `nov3.png`, `postgres.png` retaken from the final app
+
+### Outstanding (needs a person)
+
+- Commit, then confirm CI is green on that commit.
+- Open each ground-truth page and set `review: "human-confirmed"` where it matches.

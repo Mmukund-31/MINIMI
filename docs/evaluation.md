@@ -2,7 +2,7 @@
 
 | Suite | Command | Network | Purpose |
 |---|---|---|---|
-| Tests | `npm test` | none | 168 unit + integration tests (Fastify inject, deterministic test doubles) |
+| Tests | `npm test` | none | 177 unit + integration tests (Fastify inject, deterministic test doubles) |
 | Offline eval | `npm run eval` | none | 54 scenarios that pin down the deterministic machinery under known, including adversarial, model outputs → [evals/REPORT.md](../evals/REPORT.md) |
 | Live eval | `npm run eval:live` | Groq + Tavily | the 3 official prompts + 2 controls end-to-end, graded against ground truth → [evals/LIVE_REPORT.md](../evals/LIVE_REPORT.md) |
 
@@ -22,6 +22,8 @@ The scenarios were written alongside the code to pin down the behaviors in the b
 
 ## Live evaluation design
 
+Offline testing (`npm test`, `npm run eval`) uses deterministic doubles and no network: it proves the machinery behaves as specified on known inputs. Live validation (`npm run eval:live`) uses real Groq + Tavily and is the only measure of end-to-end answer quality.
+
 Each live case is checked two ways.
 
 **1. Automatic checks (pass/fail, no ground truth needed):**
@@ -36,7 +38,7 @@ Each live case is checked two ways.
   - no `changed` resting on a page published before the conversation (historical cutoff).
 - **Plan attribution rate (reported):** the share of pricing evidence whose price is tied to the named plan (quote-to-claim relevance).
 
-**2. Ground-truth grading** against [evals/ground-truth.json](../evals/ground-truth.json). Each entry quotes the vendor's official page. It was fetched automatically on 2026-11-15 and is **marked `provisional` until a person opens the page and sets `review: "human-confirmed"`**; reports label grades "provisional" until then. Entries whose price wasn't visible in the page text (Render, Zoho, Pipedrive, and Copilot Business/Enterprise) carry no expectation and are reported as *ungraded*, never guessed. Grades:
+**2. Ground-truth grading** against [evals/ground-truth.json](../evals/ground-truth.json). Each entry quotes the vendor's official page. On 2026-11-19 an AI agent re-opened every page and found the quoted text (`review: "agent-verified 2026-11-19"`). **No entry is `human-confirmed`, so every grade is reported as provisional.** Entries whose price couldn't be confirmed on the page (Render, AWS RDS, Pipedrive, Zoho) carry no expectation and are reported as *ungraded*, never guessed. Grades:
 
 | Grade | Meaning |
 |---|---|
@@ -45,7 +47,7 @@ Each live case is checked two ways.
 | wrong | a confident verdict ground truth contradicts, or a ruled-out status (e.g. "unchanged" for Salesforce "Enterprise", which no longer exists) |
 | missing | no comparison row for that vendor and plan |
 
-## Live results (actual)
+## Live results, rounds 1–2 (actual, 2026-11-15)
 
 Across the **9 graded, complete live runs** on 2026-11-15 (09:57–10:42 UTC; table in [evals/LIVE_REPORT.md](../evals/LIVE_REPORT.md#run-history)):
 
@@ -156,3 +158,51 @@ Search failures/timeouts: 0/314 searches.
 ### Live evaluation limitations in this round
 
 All round-3 changes are covered by offline tests (168 tests, 54/54 scenarios). The live re-run could **not** be performed: `gpt-oss-120b`'s daily quota was still exhausted (196.6K/200K), and `TAVILY_API_KEY` in `.env` became empty during the session. The live numbers above and in [evals/LIVE_REPORT.md](../evals/LIVE_REPORT.md) are from the earlier rounds' code. Re-run `npm run eval:live` once both are available.
+
+## Round 4 (submission verification, 2026-11-19)
+
+The Round-3 live gap is closed: `npm run eval:live` ran three times on 2026-11-19 against real Groq + Tavily, with `MAX_SEARCHES=10` (now the default everywhere, including `.env.example`).
+
+### Live results (actual, final run 14:41 UTC; provisional ground truth)
+
+| Case | Auto checks | Correct / abstained / wrong / missing · ungraded | Notes |
+|---|---|---|---|
+| CRM (5 vendors) | pass | 2 / 1 / 0 / 0 · 2 | all 5 vendors have rows. HubSpot unchanged ($90 annual). Salesforce "Enterprise" correctly not given a price verdict. Freshsales abstained (no plan-verified price retrieved). Salesforce product update "changed" (salesforce.com, dated 17 Nov, after the 16 Nov baseline). Completeness **missed** Salesforce Core/Advanced/Max (no Salesforce prices retrieved this run) |
+| 3 November | pass | 3 / 0 / 0 / 0 · 0 | Copilot Pro $10, Business $19, Enterprise $39 unchanged. "Also offered now": Pro+ $39 and Max $100, both matching ground truth |
+| Postgres | pass | 3 / 0 / 0 / 0 · 2 | Neon `changed / pricing_model` ($19 flat → $0.106 per CU-hour). Supabase Pro and Railway Hobby unchanged. Render and AWS RDS uncertain, ungraded |
+| Cursor control | pass (auto) | hand-graded: **incomplete** | said "$20 per month" (true) but not that Pro is a legacy plan no longer sold to new customers (cursor.com help page) |
+| Chat control | pass | – | no search, no citations |
+
+**Totals: 8 correct / 1 abstained / 0 wrong / 0 missing (provisional).** The run history in [evals/LIVE_REPORT.md](../evals/LIVE_REPORT.md#run-history) shows the progression on the same day: 3/4/0/1 (before the Round-4 fixes) → 7/1/0/0 → 8/1/0/0. Three runs is not a statistical sample, and live results vary between runs.
+
+### Answer-text problems found by reading the answers (not caught by auto checks)
+
+Citation validity is not accuracy, so every answer was read against its sources.
+- **Postgres:** the answer says the earlier answer "correctly listed Neon at $19/month". It also says the flat rate "from 17 Nov 2026 was replaced", which implies the change happened after the conversation. Neon's changelog (dated only by its URL slug, 2025-11-07) indicates the plan was already usage-based before it. The comparison row (`changed / pricing_model`) is accepted by ground truth, but the prose overstates it. **Not fixed.**
+- **CRM:** the answer says no releases were found for Freshsales. In fact its update search returned 0 results, so it was not checked. The synthesis prompt now asks to keep "Not checked" separate, but the model didn't follow it in this run. **Prompt-level only, not enforced in code.**
+- **Cursor control:** incomplete, as above. The structural checks can't detect an omitted qualifier.
+
+### Defects found live in Round 4 and fixed (each has a regression test; not yet re-validated by a further live run except where the final run shows it)
+
+| Live failure | Fix |
+|---|---|
+| Copilot Pro listed as "also offered now" although the earlier answer named it | offering excludes plans mentioned anywhere in the earlier answer text (whole-phrase match, "Pro" ≠ "Pro+") |
+| Meters ("Compute", "Storage") listed as plans | meter attributes are plan-less: never offerings, never plan-verified |
+| Plan folded into the subject ("Neon Launch" / attribute "price") not matched | plan-less attributes match via the subject |
+| Planner extracted "Cost for 10 developers" as a vendor claim | derived claims (team totals, annual sums) dropped deterministically |
+| forum.cursor.com thread ("Think Cursor Pro is $20/month? Nope") counted as official | user-generated hosts and paths on vendor domains are third-party |
+
+### Ground-truth verification status
+
+| Entry | Status |
+|---|---|
+| Supabase Pro, Railway Hobby, Neon Launch, Copilot Pro/Business/Enterprise, Freshsales Pro, HubSpot Professional, Salesforce (Enterprise absent), offering (Copilot Pro+/Max, Salesforce Core/Advanced/Max), Cursor control | **agent-verified 2026-11-19**: an AI agent opened the official page and found the quoted text. Not human-confirmed |
+| Zoho CRM Professional | **withdrawn**: every edition tab showed the same "₹ 800" (likely a placeholder), and the Round-3 "US$23" excerpt couldn't be confirmed |
+| Pipedrive Professional | not verifiable: HTTP 403 to automated fetches |
+| Render Basic-1gb, AWS RDS db.t4g.micro | not verifiable: prices are JavaScript-rendered |
+
+No expectation was changed to improve a score. Copilot Business/Enterprise were *added* (they were ungraded) after the docs.github.com page was opened independently of the system's output. Every change is in the file's `changeLog`.
+
+### Automated checks (actual, from a clean `npm ci`)
+
+`npm run typecheck` 0 errors · `npm run lint` clean · `npm test` **177/177** · `npm run eval` **54/54** (REPORT.md regenerated byte-identical) · `npm run build` ok. GitHub Actions CI: **success** on 801250e (run 43710486067). The Round-4 changes are uncommitted at the owner's request, so CI hasn't run on them yet.

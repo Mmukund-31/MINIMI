@@ -1,6 +1,6 @@
 {
-  "description": "Ground truth for grading live-eval verdicts against the seeded baselines. Each entry quotes the vendor's own page. 'review' must be changed to 'human-confirmed' by a person who opened the page; until then grades are reported as PROVISIONAL. Entries whose price was not visible have no 'expected' and are not graded (never guess). Expectations are only changed when new official evidence justifies it, never to make the system pass; every such change is logged in 'changeLog'.",
-  "fetchedAt": "2026-11-15",
+  "description": "Ground truth for grading live-eval verdicts against the seeded baselines. Each entry quotes the vendor's own page. Review states: 'provisional' (not yet re-opened), 'agent-verified YYYY-MM-DD' (an AI agent opened the page and found the quoted text), 'human-confirmed' (a person opened and checked it). Grades are reported as PROVISIONAL unless every graded entry is 'human-confirmed'. Entries whose price was not visible have no 'expected' and are not graded (never guess). Expectations change only when official evidence justifies it, never to make the system pass; every change is logged in 'changeLog'.",
+  "fetchedAt": "2026-11-19",
   "methods": {
     "page-fetch": "automated fetch of the official page text (no JavaScript rendering)",
     "official-domain-search": "official-domain search excerpt (Tavily include_domains), independent of the system's LLM extraction"
@@ -9,15 +9,15 @@
     "demo-postgres": [
       {
         "subject": "Supabase", "plan": "Pro", "url": "https://supabase.com/pricing", "method": "page-fetch",
-        "quote": "Pro - from $25/month",
+        "quote": "Pro - from $25/month; Our Pro Plan is charged up front, and billed on a monthly basis.",
         "expected": { "acceptable": ["unchanged"], "dimension": "price_amount" },
-        "review": "provisional"
+        "review": "agent-verified 2026-11-19"
       },
       {
         "subject": "Railway", "plan": "Hobby", "url": "https://railway.com/pricing", "method": "page-fetch",
-        "quote": "Hobby — $5/month, including $5 of monthly usage credits.",
+        "quote": "| Hobby | $5 | $5/month |; Hobby — $5/month, including $5 of monthly usage credits.",
         "expected": { "acceptable": ["unchanged"], "dimension": "price_amount" },
-        "review": "provisional"
+        "review": "agent-verified 2026-11-19 (also docs.railway.com/pricing: '| **Hobby** | $5/mo |')"
       },
       {
         "subject": "Neon", "plan": "Launch", "url": "https://neon.com/pricing", "method": "page-fetch",
@@ -25,62 +25,81 @@
         "expected": {
           "acceptable": ["changed"], "dimension": "pricing_model",
           "alsoCorrect": { "status": "uncertain", "historicalAccuracy": "already_outdated" },
-          "note": "Flat $19/month (seed) vs usage-based now. Neon's dated changelog (https://neon.com/docs/changelog/2025-11-07: 'Launch plan: Now $0.106 per CU-hour (previously $0.14)') shows the model was already usage-based before the conversation, so flagging the earlier answer as already out of date is also correct. A confident 'unchanged' is wrong."
+          "note": "Flat $19/month (seed) vs usage-based now. Neon's changelog (https://neon.com/docs/changelog/2025-11-07: 'Launch plan: Now $0.106 per CU-hour (previously $0.14)'; dated only by its URL slug) indicates the plan was already usage-based before the conversation, so flagging the earlier answer as already out of date is also correct. A confident 'unchanged' is wrong."
         },
-        "review": "provisional"
+        "review": "agent-verified 2026-11-19 (pricing page 'Last updated: 2026-11-04'; FAQ: 'The Launch plan has no monthly minimum. You pay $0.106 per CU-hour')"
       },
       { "subject": "Render", "plan": "Basic-1gb", "url": "https://render.com/pricing", "quote": null, "expected": null, "review": "not verifiable: Postgres instance prices are not in the fetched page text (JavaScript-rendered)" },
       { "subject": "AWS RDS for PostgreSQL", "plan": "db.t4g.micro", "url": "https://aws.amazon.com/rds/postgresql/pricing/", "quote": null, "expected": null, "review": "not verifiable: regional instance price tables are JavaScript-rendered; not fetched" }
     ],
     "demo-nov3": [
       {
-        "subject": "GitHub Copilot", "plan": "Pro", "url": "https://github.com/features/copilot/plans", "method": "page-fetch",
-        "quote": "$10USDper user / month",
+        "subject": "GitHub Copilot", "plan": "Pro", "url": "https://docs.github.com/en/copilot/get-started/plans", "method": "page-fetch",
+        "quote": "Copilot Pro | $10 USD per month (free for some users)",
         "expected": { "acceptable": ["unchanged"], "dimension": "price_amount" },
-        "review": "provisional"
+        "review": "agent-verified 2026-11-19 (also github.com/features/copilot/plans: '$10USD per user / month')"
       },
-      { "subject": "GitHub Copilot", "plan": "Business", "url": "https://github.com/features/copilot/plans", "quote": null, "expected": null, "review": "not verifiable independently: price not in fetched page text. The system's own evidence (docs.github.com) is not used as ground truth to avoid circular grading." },
-      { "subject": "GitHub Copilot", "plan": "Enterprise", "url": "https://github.com/features/copilot/plans", "quote": "Contact sales", "expected": null, "review": "not verifiable independently: page shows 'Contact sales' only" }
+      {
+        "subject": "GitHub Copilot", "plan": "Business", "url": "https://docs.github.com/en/copilot/get-started/plans", "method": "page-fetch",
+        "quote": "Copilot Business | $19 USD per granted seat per month",
+        "expected": { "acceptable": ["unchanged"], "dimension": "price_amount" },
+        "review": "agent-verified 2026-11-19"
+      },
+      {
+        "subject": "GitHub Copilot", "plan": "Enterprise", "url": "https://docs.github.com/en/copilot/get-started/plans", "method": "page-fetch",
+        "quote": "Copilot Enterprise | $39 USD per granted seat per month",
+        "expected": { "acceptable": ["unchanged"], "dimension": "price_amount" },
+        "review": "agent-verified 2026-11-19"
+      }
     ],
     "demo-crm": [
       {
         "subject": "Freshsales", "plan": "Pro", "url": "https://www.freshworks.com/crm/pricing/", "method": "page-fetch",
         "quote": "$39/user/month, billed annually",
         "expected": { "acceptable": ["unchanged"], "dimension": "price_amount" },
-        "review": "provisional"
+        "review": "agent-verified 2026-11-19"
       },
       {
         "subject": "HubSpot Sales Hub", "plan": "Professional", "url": "https://www.hubspot.com/pricing/sales", "method": "page-fetch",
-        "quote": "Professional … Starts at $90/mo/seat $100/mo/seat Billing period Pay Monthly Commit annually Pay Annually",
-        "expected": { "acceptable": ["unchanged", "uncertain"], "dimension": "price_amount", "note": "Page shows $90 (annual commitment, inferred) and $100 (monthly). Seed: $90 billed annually. 'uncertain' is acceptable because the page layout doesn't explicitly bind each number to a billing option." },
-        "review": "provisional"
+        "quote": "Starts at / $90/mo/seat / $100/mo/seat / Billing period / Pay Monthly / Commit annually / Pay Annually",
+        "expected": { "acceptable": ["unchanged", "uncertain"], "dimension": "price_amount", "note": "Page shows $90 and $100 per seat/month without explicitly binding each to a billing option. Seed: $90 billed annually. 'uncertain' is acceptable for that reason." },
+        "review": "agent-verified 2026-11-19"
       },
       {
         "subject": "Salesforce Sales Cloud", "plan": "Enterprise", "url": "https://www.salesforce.com/sales/pricing/", "method": "page-fetch",
-        "quote": "Core $ 195 USD/User/Month (Billed annually) ... Advanced $ 395 ... Max $ 550 (no edition named 'Enterprise')",
+        "quote": "Starter Suite $ 25 ... Pro Suite $ 100 ... Core $ 195 ... Advanced $ 395 ... Max $ 550 USD/User/Month (no edition named 'Enterprise')",
         "expected": { "acceptable": ["uncertain", "changed"], "dimension": "plan_availability", "forbidden": ["unchanged"], "note": "The Enterprise edition no longer appears; a price verdict on 'Enterprise' would be wrong." },
-        "review": "provisional"
+        "review": "agent-verified 2026-11-19"
       },
-      {
-        "subject": "Zoho CRM", "plan": "Professional", "url": "https://www.zoho.com/crm/zohocrm-pricing-calculator.html", "method": "official-domain-search",
-        "quote": "Professional US$23 ... /user/month",
-        "expected": { "acceptable": ["unchanged"], "dimension": "price_amount", "note": "Zoho's main pricing page is geo-served (₹1,400/user/month seen); a currency 'not_comparable' is an honest abstention, not an error." },
-        "review": "provisional"
-      },
+      { "subject": "Zoho CRM", "plan": "Professional", "url": "https://www.zoho.com/crm/zohocrm-pricing-calculator.html", "quote": null, "expected": null, "review": "not verifiable: on 2026-11-19 the calculator showed an identical '₹ 800 / Cost /user/month' on every edition tab (likely a placeholder) and the main pricing page is geo-served in INR; the round-3 'US$23' search excerpt could not be confirmed by opening the page, so the expectation was withdrawn" },
       { "subject": "Pipedrive", "plan": "Professional", "url": "https://www.pipedrive.com/en/pricing", "quote": null, "expected": null, "review": "not verifiable: pricing page blocks automated fetches (HTTP 403); official-domain search returned no plan prices" }
     ]
   },
   "offering": {
     "demo-nov3": [
-      { "subject": "GitHub Copilot", "plansExpected": ["Pro+", "Max"], "url": "https://github.com/features/copilot/plans", "quote": "Pro+ … $39USDper user / month … Max … $100USDper user / month", "review": "provisional" }
+      { "subject": "GitHub Copilot", "plansExpected": ["Pro+", "Max"], "url": "https://docs.github.com/en/copilot/get-started/plans", "quote": "Copilot Pro+ | $39 USD per month. ... Copilot Max | $100 USD per month", "review": "agent-verified 2026-11-19" }
     ],
     "demo-crm": [
-      { "subject": "Salesforce Sales Cloud", "plansExpected": ["Core", "Advanced", "Max"], "url": "https://www.salesforce.com/sales/pricing/", "quote": "Core $ 195 USD/User/Month (Billed annually) ... Advanced $ 395 ... Max $ 550", "review": "provisional" }
+      { "subject": "Salesforce Sales Cloud", "plansExpected": ["Core", "Advanced", "Max"], "url": "https://www.salesforce.com/sales/pricing/", "quote": "Core $ 195 ... Advanced $ 395 ... Max $ 550 USD/User/Month (Billed annually)", "review": "agent-verified 2026-11-19" }
     ]
+  },
+  "controls": {
+    "control-research": {
+      "question": "What is the current price of the Cursor Pro plan?",
+      "url": "https://cursor.com/help/account-and-billing/pricing",
+      "quote": "Current plans: Plus $8/mo, Premium $30/mo, Super $100/mo, Ultra $200/mo. Legacy table: '| Pro | $20/mo | Premium |' (legacy plans 'aren't available to new customers, but existing subscribers keep them')",
+      "correctAnswer": "Pro is a legacy plan at $20/month; it is no longer offered to new customers (nearest current tier: Premium $30/month).",
+      "review": "agent-verified 2026-11-19",
+      "note": "Not auto-graded (this control produces no comparison rows); graded by hand in docs/evaluation.md."
+    }
   },
   "changeLog": [
     { "date": "2026-11-15", "entry": "Neon Launch", "change": "added alsoCorrect {uncertain, already_outdated}; 'changed/pricing_model' still acceptable", "why": "official dated changelog shows the transition predates the seeded conversation" },
-    { "date": "2026-11-15", "entry": "Zoho CRM Professional", "change": "added expectation (was ungraded)", "why": "official-domain search excerpt from zoho.com pricing calculator states the Professional price" },
-    { "date": "2026-11-15", "entry": "offering (Copilot, Salesforce)", "change": "added completeness ground truth", "why": "plans listed on the official pages but not in the seeded answers" }
+    { "date": "2026-11-15", "entry": "Zoho CRM Professional", "change": "added expectation (was ungraded)", "why": "official-domain search excerpt from zoho.com pricing calculator stated the Professional price" },
+    { "date": "2026-11-15", "entry": "offering (Copilot, Salesforce)", "change": "added completeness ground truth", "why": "plans listed on the official pages but not in the seeded answers" },
+    { "date": "2026-11-19", "entry": "all entries with a quote", "change": "review → 'agent-verified 2026-11-19'", "why": "an AI agent opened each official page and found the quoted text; still provisional until human-confirmed" },
+    { "date": "2026-11-19", "entry": "GitHub Copilot Business, Enterprise", "change": "added expectations (were ungraded)", "why": "now confirmed independently by opening docs.github.com plans page, not from the system's own output" },
+    { "date": "2026-11-19", "entry": "Zoho CRM Professional", "change": "expectation withdrawn", "why": "opening the page did not confirm the round-3 excerpt (identical ₹800 placeholder on all tabs); an unverifiable expectation must not be graded" },
+    { "date": "2026-11-19", "entry": "control-research (Cursor)", "change": "added hand-graded control truth", "why": "official help page shows Pro is a legacy plan" }
   ]
 }

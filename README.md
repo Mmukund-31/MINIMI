@@ -34,6 +34,12 @@ The app starts without keys; the UI banner and `/api/health` say what's missing.
 
 ![Empty-chat screen with the three challenge prompts as one-click examples, seeded demo history in the sidebar](docs/screenshots/home.png)
 
+![3 November recall: Copilot Pro, Business and Enterprise prices unchanged; Pro+ and Max listed as also offered now](docs/screenshots/nov3.png)
+
+![Postgres since last Tuesday: Neon changed pricing model (flat to usage-based), Supabase and Railway unchanged, Render and AWS uncertain](docs/screenshots/postgres.png)
+
+Screenshots are from the final app against live Groq + Tavily on 2026-11-19. Live output varies between runs.
+
 Every row in the table carries a **status** (changed / unchanged / uncertain / not comparable) and the **dimension** it concerns (price, pricing model, billing terms, currency, plan availability, features). Sources show whether they are the vendor's own page or third-party, plus their publish date (or "no publish date").
 
 ## Architecture
@@ -76,21 +82,22 @@ evals/          offline scenarios, live runner, grading, ground truth, reports
 
 | Command | What it checks | Last result |
 |---|---|---|
-| `npm test` | 168 unit + integration tests (Fastify inject, deterministic doubles, no network) | 168/168 |
+| `npm test` | 177 unit + integration tests (Fastify inject, deterministic doubles, no network) | 177/177 |
 | `npm run eval` | 54 deterministic scenarios: dates, memory, research, pricing, completeness, updates, multi-turn, uncertainty, adversarial, the 3 demos. Report: [evals/REPORT.md](evals/REPORT.md) | 54/54 |
-| `npm run eval:live` | the 3 demos + 2 controls against real Groq + Tavily. Structural + product-update checks, completeness grading, and verdict grading against [human-reviewable ground truth](evals/ground-truth.json). Report: [evals/LIVE_REPORT.md](evals/LIVE_REPORT.md) | see [docs/evaluation.md](docs/evaluation.md) |
+| `npm run eval:live` | the 3 demos + 2 controls against real Groq + Tavily. Structural + product-update checks, completeness grading, and verdict grading against [human-reviewable ground truth](evals/ground-truth.json). Report: [evals/LIVE_REPORT.md](evals/LIVE_REPORT.md) | 5/5 auto checks; 8 correct / 1 abstained / 0 wrong, provisional (2026-11-19, [details](docs/evaluation.md#round-4-submission-verification-2026-11-19)) |
 | `npm run eval:perf` | searches, LLM calls, tokens and per-stage latency computed from saved live runs (no API calls) | see [docs/evaluation.md](docs/evaluation.md) |
 | `npm run lint` · `npm run typecheck` · `npm run build` | ESLint, strict tsc, production build | clean |
 
 CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs a clean `npm ci`, typecheck, lint, tests, offline evaluation and build on Ubuntu (Node 22 and 24) and Windows (Node 24).
 
-Offline scenarios test the deterministic machinery against known model outputs. They don't measure live model quality. The live suite does, graded against ground truth taken from official pages and **marked provisional until a person confirms it**.
+Offline scenarios test the deterministic machinery against known model outputs. They don't measure live model quality. The live suite does, graded against ground truth taken from official pages and **marked provisional until a person confirms it** (currently agent-verified, not human-confirmed). Automatic checks don't judge answer prose: in the final live run the Postgres answer overstates when Neon changed, and the Cursor control omits that Pro is a legacy plan (see [docs/evaluation.md](docs/evaluation.md)).
 
 ## Known limitations
 
 - Vendor pages that render prices with JavaScript, and sites that block fetchers, give "uncertain" rows.
 - Groq's free tier has per-model quotas (8K tokens/min; 200K tokens/day measured for `gpt-oss-120b`). Heavy use falls back to the smaller model, with a note in the answer.
 - Live results vary between runs because search results and model outputs vary.
+- Answer prose can overstate or drop qualifiers that the comparison table states correctly: the table is computed in code, the prose is written by the model.
 - Seed prices are best-effort demo data, so a "changed" verdict can reflect seed inaccuracy.
 - Single user, single SQLite file, no authentication.
 

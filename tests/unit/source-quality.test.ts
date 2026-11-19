@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   assessOffering,
+  classifySource,
   comparePricing,
   explainMissingEvidence,
+  mentionedIn,
   focusedExcerpt,
   isOfficialDomain,
   planAttributionVerified,
@@ -28,6 +30,19 @@ describe("official-domain detection uses the registrable domain", () => {
     expect(isOfficialDomain("docs.github.com", [{ name: "GitHub Copilot" }])).toBe(true);
     expect(isOfficialDomain("aws.amazon.com", [{ name: "AWS RDS", officialDomain: "aws.amazon.com" }])).toBe(true);
     expect(isOfficialDomain("aws.amazon.com", [{ name: "AWS RDS", officialDomain: null }])).toBe(false);
+  });
+});
+
+describe("user-generated pages on vendor domains (live 2026-11-19)", () => {
+  const r = (url: string, title: string): SearchResult => ({ title, url, snippet: "", retrievedAt: "x", sourceDomain: new URL(url).hostname, provider: "t", query: "q" });
+  const subj = [{ name: "Cursor", officialDomain: "cursor.com" }];
+  it("classes vendor forums and community Q&A as third-party", () => {
+    expect(classifySource(r("https://forum.cursor.com/t/think-cursor-pro-is-20-month/136405", "Think Cursor Pro is $20/month? Nope"), subj)).toBe("third_party");
+    expect(classifySource(r("https://help.zoho.com/portal/en/community/topic/question-about-zoho-crm", "Question about Zoho CRM"), [{ name: "Zoho CRM", officialDomain: "zoho.com" }])).toBe("third_party");
+  });
+  it("keeps the vendor's own help center and pricing pages official", () => {
+    expect(classifySource(r("https://cursor.com/help/account-and-billing/pricing", "Pricing and plans | Cursor Docs"), subj)).toBe("official_pricing");
+    expect(classifySource(r("https://support.pipedrive.com/en/article/new-pipedrive-plans", "What's new in Pipedrive plans?"), [{ name: "Pipedrive", officialDomain: "pipedrive.com" }])).toBe("official_pricing");
   });
 });
 
@@ -157,6 +172,44 @@ describe("completeness: historical accuracy and offering", () => {
     const [x] = comparePricing([c("Copilot Pro", "$10 per month")], [e("Copilot Pro", "$12 per month", { publishedAt: "2026-10-01T00:00:00Z" })]);
     expect(x).toMatchObject({ status: "uncertain", historicalAccuracy: "already_outdated" });
     expect(x!.explanation).toMatch(/already listed/);
+  });
+});
+
+describe("round 4 regressions (live 2026-11-19)", () => {
+  let k = 0;
+  const e = (subject: string, attribute: string, value: string, extra: Partial<Evidence> = {}): Evidence => ({
+    id: `r${++k}`, claim: "", subject, category: "pricing", attribute, value, quote: value, sourceId: `S${k}`,
+    sourceUrl: "https://vendor.example/pricing", sourceTitle: "Pricing", sourceKind: "official_pricing",
+    retrievedAt: "2026-11-19T00:00:00Z", evidenceType: "current", strength: "strong", planVerified: false, ...extra,
+  });
+  const cl = (subject: string, attribute: string, value: string) => ({ subject, category: "pricing" as const, attribute, value, messageId: "m", statedAt: "2026-11-17T10:00:00Z" });
+
+  it("matches a plan folded into the subject when the extractor labelled the price generically (Supabase Pro / price)", () => {
+    const [c] = comparePricing([cl("Supabase Pro", "Supabase Pro", "$25 per month per organization")], [e("Supabase Pro", "price", "$25 per month")]);
+    expect(c).toMatchObject({ status: "unchanged", dimension: "price_amount" });
+    expect(c!.explanation).toMatch(/doesn't name the plan/);
+  });
+  it("never lets a subject-carried plan prove a change (it isn't plan-verified)", () => {
+    const [c] = comparePricing([cl("Railway Hobby", "Railway Hobby", "$5 per month")], [e("Railway Hobby", "price", "$8 per month")]);
+    expect(c!.status).toBe("uncertain");
+  });
+  it("matches meter-labelled usage rates to the plan named in the subject, without verifying the plan (Neon Launch / compute)", () => {
+    const [c] = comparePricing([cl("Neon Launch", "Neon Launch", "$19 per month")], [e("Neon Launch", "compute", "$0.14 per CU-hour"), e("Neon Launch", "storage", "$0.35 per GB-month")]);
+    expect(c).toMatchObject({ status: "uncertain", dimension: "pricing_model" });
+  });
+  it("offering excludes plans the earlier answer mentioned even if not extracted as claims (Copilot Pro)", () => {
+    const earlier = "- **Copilot Pro** (individuals): $10 per month.\n- **Copilot Business**: $19 per user/month.";
+    const claims = [cl("GitHub Copilot", "Copilot Business", "$19 per user/month")];
+    const ev = [e("GitHub Copilot", "Copilot Pro", "$10 USD per month", { planVerified: true }), e("GitHub Copilot", "Copilot Pro+", "$39 USD per month", { planVerified: true })];
+    expect(assessOffering(claims, ev, earlier)[0]!.plansNotDiscussed.map((p) => p.plan)).toEqual(["Copilot Pro+"]);
+  });
+  it("offering never lists meters or usage rates as plans (Neon compute/storage)", () => {
+    const ev = [e("Neon", "compute", "$0.14 per CU-hour", { planVerified: true }), e("Neon", "Scale", "$0.222 per CU-hour", { planVerified: true })];
+    expect(assessOffering([cl("Neon", "Launch", "$19 per month")], ev)).toEqual([]);
+  });
+  it("mentionedIn treats Pro and Pro+ as different plans", () => {
+    expect(mentionedIn("copilot pro (individuals): $10", "Copilot Pro", "GitHub Copilot")).toBe(true);
+    expect(mentionedIn("copilot pro (individuals): $10", "Copilot Pro+", "GitHub Copilot")).toBe(false);
   });
 });
 

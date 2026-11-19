@@ -102,6 +102,16 @@ export function isGenericAttribute(attribute: string): boolean {
   return /^(the\s+)?(price|prices|pricing|cost|costs|plan|plans|base price|entry plan|entry price|starting price|paid plan)\s*$/i.test(attribute.trim());
 }
 
+/** A usage meter rather than a plan name ("compute", "storage", "egress", …). */
+export function isMeterAttribute(attribute: string): boolean {
+  return /^(compute|storage|egress|bandwidth|data transfer|requests?|usage|cu[- ]?hours?|instant restore|branches?)(\s+(price|pricing|cost|rate))?$/i.test(attribute.trim());
+}
+
+/** Attributes that carry no plan identity (the plan, if any, is then named by the evidence subject). */
+export function isPlanlessAttribute(attribute: string): boolean {
+  return isGenericAttribute(attribute) || isMeterAttribute(attribute);
+}
+
 /** A year in a page title/URL that is older than the retrieval year (e.g. "Pipedrive pricing 2024"). */
 export function staleYear(text: string, retrievedAt: string): number | null {
   const current = new Date(retrievedAt).getUTCFullYear();
@@ -132,7 +142,17 @@ export function comparePricing(claims: HistoricalClaim[], evidence: Evidence[]):
     // A generic label ("price", "pricing") identifies no plan: usable only if the vendor has a single current price.
     const generic = isGenericAttribute(claim.attribute);
     const distinctPlans = new Set(forSubject.map((e) => normalizeForMatch(e.attribute)));
-    const samePlan = generic ? (distinctPlans.size === 1 ? forSubject : []) : forSubject.filter((e) => planMatches(e.attribute, claim.attribute, claim.subject));
+    // Plan identity normally comes from the evidence attribute. When the extractor labelled it
+    // "price" or by a meter ("compute"), the plan can only come from the evidence subject
+    // (e.g. subject "Supabase Pro"). Such evidence is never plan-verified (see evidence.ts),
+    // so it can support "unchanged" with a qualifier but can never prove "changed".
+    const samePlan = generic
+      ? distinctPlans.size === 1
+        ? forSubject
+        : []
+      : forSubject.filter(
+          (e) => planMatches(e.attribute, claim.attribute, claim.subject) || (isPlanlessAttribute(e.attribute) && planMatches(e.subject, claim.attribute, claim.subject)),
+        );
     if (samePlan.length === 0) {
       const plans = [...new Set(forSubject.map((e) => `${e.attribute}: ${e.value}`))].slice(0, 3).join("; ");
       out.push({
@@ -274,16 +294,36 @@ export function comparePricing(claims: HistoricalClaim[], evidence: Evidence[]):
  * the plan) that none of the earlier claims discussed. This is reported separately from changes:
  * a plan missing from the earlier answer may be new, or may simply have been left out.
  */
-export function assessOffering(claims: HistoricalClaim[], evidence: Evidence[]): OfferingNote[] {
+/**
+ * Is a plan name mentioned in the (normalised) earlier text? Brand words are ignored, the rest
+ * must appear as a whole phrase: "Copilot Pro" matches "Copilot Pro (individuals)" but not
+ * "Copilot Pro+" ("+" is kept as part of the name).
+ */
+export function mentionedIn(normalizedText: string, plan: string, subject: string): boolean {
+  if (!normalizedText) return false;
+  const brand = new Set(normalizeForMatch(subject).split(/[^a-z0-9+]+/).filter((t) => t.length >= 3));
+  const core = normalizeForMatch(plan)
+    .split(/[^a-z0-9+.]+/)
+    .filter((t) => t && !brand.has(t) && !["plan", "tier", "the"].includes(t));
+  if (core.length === 0) return false;
+  const phrase = core.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[^a-z0-9+]+");
+  return new RegExp(`(^|[^a-z0-9+])${phrase}(?![a-z0-9+])`).test(normalizedText);
+}
+
+export function assessOffering(claims: HistoricalClaim[], evidence: Evidence[], earlierAnswerText = ""): OfferingNote[] {
   const subjects = [...new Set(claims.filter((c) => c.category === "pricing").map((c) => c.subject))];
   const notes: OfferingNote[] = [];
+  const earlier = normalizeForMatch(earlierAnswerText);
   for (const subject of subjects) {
     const discussed = claims.filter((c) => subjectMatches(c.subject, subject) && c.category === "pricing");
     const extra = new Map<string, { plan: string; value: string; sourceId: string }>();
     for (const e of evidence) {
       if (e.category !== "pricing" || !isOfficial(e) || e.planVerified !== true || !subjectMatches(e.subject, subject)) continue;
-      if (isGenericAttribute(e.attribute)) continue;
+      // Meters ("compute: $0.14 per CU-hour") and generic labels are not plans.
+      if (isPlanlessAttribute(e.attribute) || parsePrice(e.value).usageUnit !== null) continue;
       if (discussed.some((c) => planMatches(e.attribute, c.attribute, subject))) continue;
+      // The planner may not have extracted every plan as a claim: check the earlier answer's text itself.
+      if (mentionedIn(earlier, e.attribute, subject)) continue;
       const key = normalizeForMatch(e.attribute);
       if (!extra.has(key)) extra.set(key, { plan: e.attribute, value: e.value, sourceId: e.sourceId });
     }

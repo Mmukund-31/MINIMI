@@ -81,8 +81,22 @@ export function mentionsSubject(r: SearchResult, subject: string | null | undefi
   return toks.some((t) => text.includes(t));
 }
 
+/**
+ * User-generated pages hosted on a vendor's domain (forums, community Q&A) are not the vendor
+ * speaking: forum.cursor.com threads titled "Think Cursor Pro is $20/month? Nope" or
+ * help.zoho.com/portal/…/community/… questions must never count as official evidence.
+ */
+export function isUserGenerated(url: string, domain: string): boolean {
+  if (/^(forum|forums|community|discuss|discussions|answers|talk|users)\./.test(domain)) return true;
+  try {
+    return /\/(community|forums?|discussions?|t)\//.test(new URL(url).pathname) && /^(forum|community|discuss|help|support)\./.test(domain);
+  } catch {
+    return false;
+  }
+}
+
 export function classifySource(r: SearchResult, subjects: SubjectHint[]): SourceKind {
-  const official = isOfficialDomain(r.sourceDomain, subjects);
+  const official = isOfficialDomain(r.sourceDomain, subjects) && !isUserGenerated(r.url, r.sourceDomain);
   let path: string;
   try {
     path = new URL(r.url).pathname;

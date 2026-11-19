@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { locatePriceSpan, normalizeClaims, planMatches } from "@minimi/core";
+import { isDerivedClaim, locatePriceSpan, normalizeClaims, planMatches } from "@minimi/core";
 
 describe("normalizeClaims (deterministic repair of model slips)", () => {
   const subjects = [
@@ -16,6 +16,19 @@ describe("normalizeClaims (deterministic repair of model slips)", () => {
   it("strips a repeated vendor name from the plan", () => {
     const [c] = normalizeClaims([{ subject: "Neon", category: "pricing", attribute: "Neon Launch", value: "$19 per month", messageId: "m" }], subjects);
     expect(c).toMatchObject({ subject: "Neon", attribute: "Launch" });
+  });
+  it("drops derived figures that the planner extracted as claims (live 2026-11-19: 'Cost for 10 developers')", () => {
+    const out = normalizeClaims(
+      [
+        { subject: "GitHub Copilot", category: "pricing", attribute: "Cost for 10 developers", value: "$190 per month ($2,280/yr)", messageId: "m" },
+        { subject: "GitHub Copilot", category: "pricing", attribute: "Copilot Business", value: "$19 per user/month", messageId: "m" },
+      ],
+      [{ name: "GitHub Copilot", officialDomain: null }],
+    );
+    expect(out.map((c) => c.attribute)).toEqual(["Copilot Business"]);
+    expect(isDerivedClaim("Total for 20 seats")).toBe(true);
+    expect(isDerivedClaim("Sales Hub Professional")).toBe(false);
+    expect(isDerivedClaim("Team")).toBe(false);
   });
   it("falls back to a generic label when no plan can be recovered", () => {
     const [c] = normalizeClaims(

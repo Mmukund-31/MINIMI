@@ -563,7 +563,8 @@ export class AgentOrchestrator {
           ? compareProductUpdates(subjectNames, state.evidence, state.memory?.summary.baselineDate, updateSearchedSubjects(plan.searches, executed))
           : [];
       state.comparisons = [...pricing, ...updates];
-      state.offering = assessOffering(state.claims, state.evidence);
+      const earlierAnswers = (state.memory?.exchanges ?? []).map((e) => e.assistant?.content ?? "").join("\n");
+      state.offering = assessOffering(state.claims, state.evidence, earlierAnswers);
       if (state.comparisons.length) emit({ type: "comparison", comparisons: state.comparisons });
       const counts = state.comparisons.reduce<Record<string, number>>((acc, c) => ((acc[c.status] = (acc[c.status] ?? 0) + 1), acc), {});
       return Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(", ") || "nothing to compare";

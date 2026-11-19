@@ -14,9 +14,18 @@ const looksLikePrice = (s: string) => parsePrice(s).amount !== null || /\b(free|
  *  - vendor name repeated in `attribute` ("Neon Launch") → "Launch".
  * Claims are still verified against memory afterwards; this only fixes shape.
  */
+/**
+ * Labels of derived figures (team totals, yearly sums) rather than vendor plans, e.g.
+ * "Cost for 10 developers", "Total for 20 seats", "Annual total". These are calculations
+ * from the earlier answer, not published prices, so they are never compared.
+ */
+export function isDerivedClaim(attribute: string): boolean {
+  return /\b(cost|price|total)\s+for\b|\bfor\s+\d+\s+(developers?|users?|seats?|people|members)\b|\b(team|annual|yearly|monthly)\s+total\b|^total\b|\b\d+\s+(seats?|users?|developers?)\b/i.test(attribute);
+}
+
 export function normalizeClaims(claims: PlannedClaim[], subjects: Plan["subjects"]): PlannedClaim[] {
   const names = [...subjects.map((s) => s.name)].sort((a, b) => b.length - a.length);
-  return claims.map((c) => {
+  return claims.filter((c) => !isDerivedClaim(c.attribute)).map((c) => {
     let { subject, attribute, value } = c;
     if (looksLikePrice(attribute) && !looksLikePrice(value)) [attribute, value] = [value, attribute];
     else if (looksLikePrice(attribute) && looksLikePrice(value)) attribute = "";

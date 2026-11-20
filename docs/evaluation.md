@@ -38,7 +38,7 @@ Each live case is checked two ways.
   - no `changed` resting on a page published before the conversation (historical cutoff).
 - **Plan attribution rate (reported):** the share of pricing evidence whose price is tied to the named plan (quote-to-claim relevance).
 
-**2. Ground-truth grading** against [evals/ground-truth.json](../evals/ground-truth.json). Each entry quotes the vendor's official page. On 2026-11-19 an AI agent re-opened every page and found the quoted text (`review: "agent-verified 2026-11-19"`). **No entry is `human-confirmed`, so every grade is reported as provisional.** Entries whose price couldn't be confirmed on the page (Render, AWS RDS, Pipedrive, Zoho) carry no expectation and are reported as *ungraded*, never guessed. Grades:
+**2. Ground-truth grading** against [evals/ground-truth.json](../evals/ground-truth.json). Each entry quotes the vendor's official page. An AI agent first opened every page and found the quoted text (agent-verified, 2026-11-19 and 2026-11-20). **On 2026-11-20 the project author opened each official page and confirmed every graded entry (`review: "human-confirmed"`), so grades are no longer provisional.** Earlier sections of this document describe grades as provisional because they were at the time. Entries whose price couldn't be confirmed on the page (Render, AWS RDS, Pipedrive, Zoho) carry no expectation and are reported as *ungraded*, never guessed. Grades:
 
 | Grade | Meaning |
 |---|---|
@@ -228,7 +228,7 @@ Fixes for the answer-text problems above. Each has a regression test that fails 
 | CRM | pass | 3 / 0 / 0 · 2 | update searches ran for all 5 vendors (Freshsales: 4 results, so "checked"); Freshsales Pro now **correct** (unchanged, freshworks.com); HubSpot unchanged; Salesforce Enterprise uncertain; Salesforce update "changed" (dated after the baseline) |
 | 3 November | pass | 3 / 0 / 0 · 0 | Pro / Business / Enterprise unchanged; "also offered now": Pro+, Max |
 | Postgres | pass | 2 / 1 / 0 · 2 | Neon `changed / pricing_model`, `changeTiming: unknown` → **abstained**. The timing search failed with Tavily HTTP 432 (quota). The guard appended the "can't tell whether it changed before or after our conversation" statement. This run predates the "Yes –" fix, so its answer still opens with "Yes –" |
-| Cursor control | **fail** (`citesSomething`) | – | both searches failed with Tavily HTTP 432; the answer honestly says nothing could be verified. The legacy-plan fix is **not live-validated** |
+| Cursor control | **fail** (`citesSomething`) | – | both searches failed with Tavily HTTP 432; the answer honestly says nothing could be verified. The legacy-plan fix was **not live-validated in this run** (it was later: see below) |
 | Chat control | pass | – | |
 
 **Totals: 8 correct / 1 abstained / 0 wrong (provisional); 4/5 auto checks.** The Tavily account then rejected every request ("This request exceeds your plan's set usage limit"), although its usage endpoint reported 943/1,000 credits. Part of that budget went on this session's diagnostic searches. These were validated live on 2026-11-20 with a new Tavily key; see [Live validation, 2026-11-20](#live-validation-2026-11-20).
@@ -247,7 +247,7 @@ The Tavily account was still over its limit on 2026-11-20 (usage 1,001 / 1,000; 
 | A "none found" row inside a markdown table would have been replaced with prose (breaking the table) | table rows are removed whole; the statement goes after the answer | unit test |
 | Exhausted search quota reported as generic failures, then retried | HTTP 432/433 → `SEARCH_QUOTA`: no retry, no further searches, and the answer says the search quota is exhausted | `search.test.ts` |
 
-**Cursor control on real pages, real models (after the fixes):** *"The Cursor Pro plan is now a legacy offering at $20 / month [S1] [S3]. New customers are directed to the Premium tier, which costs $30 / month [S1]."* All three ground-truth facts are present and every price is on the cited page. This used real page text and real models, but not real search, so it is **not a full live run**.
+**Cursor control on real pages, real models (after the fixes):** *"The Cursor Pro plan is now a legacy offering at $20 / month [S1] [S3]. New customers are directed to the Premium tier, which costs $30 / month [S1]."* All three ground-truth facts are present and every price is on the cited page. This used real page text and real models, but not real search, so it is **not a full live run**. Sequence for the Cursor fix: the 17:47 full live run failed (no search credits) → this real-page/real-model test passed → with a new Tavily key, full live runs on 2026-11-20 passed it in 5 of 9 runs during development and on the final commit (below).
 
 ## Live validation, 2026-11-20
 
@@ -268,6 +268,7 @@ With a new Tavily key, `npm run eval:live` ran against real Groq + Tavily. Every
 | 07:06 | 4/5 | 9 / 0 / 0 / 0 | Zoho update marked "changed" from a third-party post about Zoho *Desk* → updates need vendor or news authority (third-party = possible update); a stray "not" no longer exempts a launch claim |
 | 07:08 | 1/5 | 3 / 0 / 0 / 6 | **Final code.** CRM completed: 3/3, prose accurate. The other four cases failed: Groq's daily token quota was exhausted |
 | 07:11 | 0/5 | – | Groq daily quota exhausted |
+| **07:57** | **5/5** | **9 / 0 / 0 / 0** | **Final commit (83a5d11 code), full five-case run.** Every answer read against its rows and sources: CRM 3/3 (Salesforce Copilotforce from salesforce.com dated 17 Nov; the third-party Zoho *Desk* post now only a "possible update"); 3 November 3/3 plus Pro+ and Max; Postgres 3/3 with Neon "already out of date" (blog dated 2025-08-14); Cursor complete. **Shown in full in [evals/LIVE_REPORT.md](../evals/LIVE_REPORT.md)** |
 
 Totals over the nine complete runs (06:30–07:06): **77 correct, 4 abstained, 0 wrong, 0 missing** (provisional ground truth). No run gave a confident verdict the ground truth contradicts. The four abstentions: Neon once (06:30, before the timing fix), Copilot Pro twice, Freshsales once.
 
@@ -277,20 +278,38 @@ Totals over the nine complete runs (06:30–07:06): **77 correct, 4 abstained, 0
 |---|---|
 | 06:30, 06:39 | incomplete: "$20/month" only (only third-party pages; legacy table not parsed) |
 | 06:34, 06:46 | legacy + not sold to new customers; no successor |
-| 06:43, 06:50, 06:52, 06:56, 07:06 | **complete**: all three facts, cited to cursor.com |
+| 06:43, 06:50, 06:52, 06:56, 07:06, final commit (07:32 single case, 07:57 full run) | **complete**: all three facts, cited to cursor.com |
 
 ### What stays variable (model and search variance, honest abstentions)
 
 - **Copilot Pro** abstained in 2 of 9 runs: the extractor read GitHub's "$15 per month" *included AI-credit allowance* as Pro's price, and the conflict check refused a verdict. A deterministic credits-vs-price rule was rejected because it would also drop genuine prices on other vendors' pages.
 - **Freshsales** abstained in 1 of 9 runs (its pricing page wasn't retrieved). **Salesforce's Copilotforce** update was extracted in about half the runs; the backstop now shows it as a possible update when a dated vendor page is in the sources.
-- **Prose residue:** the guard enforces specific facts. Other wording is still the model's: e.g. a Neon sentence that doesn't name Neon ("the earlier answer already listed this model"), or a pre-conversation GitHub billing change placed under "what changed since then". The comparison rows were correct in both cases.
+- **Prose residue:** the guard enforces specific facts. Other wording is still the model's. In development runs: a Neon sentence that doesn't name Neon ("the earlier answer already listed this model"), and a pre-conversation GitHub billing change placed under "what changed since then". In the final run: the CRM answer says Salesforce's features changed and, in its last sentence, that no major release was confirmed for Salesforce; the Postgres answer files Neon under "What changed" before the appended statement says it predates the conversation. The comparison rows were correct in every case.
 
 ### Screenshots
 
-`docs/screenshots/crm.png` and `postgres.png` were retaken from the app on 2026-11-20 (fresh database, same code except the last two guard rules). `nov3.png` is from 2026-11-19.
+`docs/screenshots/crm.png` and `postgres.png` were retaken from the app on 2026-11-20 (fresh database, same code except the last two guard rules). The earlier `nov3.png` (2026-11-19) was withdrawn on review: its prose said a billing change was "announced after your question" citing a page dated 28 Oct, before the 3 Nov conversation. It was **retaken on the final commit** (2026-11-20): prices unchanged per docs.github.com, Student / Pro+ / Max listed as also offered now, and no unsupported update claim.
+
+## Human review (completed 2026-11-20)
+
+The project author opened each official page below and confirmed the quoted text. Every graded entry in [evals/ground-truth.json](../evals/ground-truth.json) is now `review: "human-confirmed"` (the earlier agent check is kept in each entry's `agentCheck` field, and the change is in `changeLog`). No expectation was changed.
+
+| Entry | URL | Confirmed |
+|---|---|---|
+| Neon Launch | neon.com/pricing · neon.com/blog/new-usage-based-pricing | Launch is usage-based ($0.106 per CU-hour); blog byline Aug 14, 2025 (before the 17 Nov conversation) |
+| Supabase Pro | supabase.com/pricing | Pro $25/month |
+| Railway Hobby | railway.com/pricing | Hobby $5/mo |
+| GitHub Copilot Pro / Business / Enterprise, Pro+ / Max | docs.github.com/en/copilot/get-started/plans | $10 / $19 / $39 USD; Pro+ $39, Max $100 |
+| Cursor control | cursor.com/docs/account/pricing/legacy-cursor-plans | Pro $20/mo is legacy → Premium ($30/mo); not available to new customers |
+| HubSpot Professional, Freshsales Pro, Salesforce (Enterprise absent; Core / Advanced / Max offered) | URLs in ground-truth.json | HubSpot $90/seat (annual), Freshsales $39/user (annual), no Salesforce edition named "Enterprise" |
+
+Render, AWS RDS, Pipedrive and Zoho stay **ungraded** (prices not retrievable: JavaScript-rendered, HTTP 403, or an INR placeholder).
 
 ## Final verification
 
-- **Local checks on the final working tree** (clean `npm ci`, 2026-11-20): typecheck 0 errors · lint clean · `npm test` **226/226** (15 files) · `npm run eval` **54/54**; `evals/REPORT.md` regenerates identically on repeat runs · `npm run build` ok. A fresh copy without `.env` passes `npm install` → `npm run dev` (UI served, demo data seeded, `/api/health` names the missing keys).
-- **Live:** the last complete run (06:56) passed 5/5 automatic checks with 9 correct / 0 abstained / 0 wrong (provisional). The final code's last two changes (update authority, negation handling) were validated live only on the CRM case (07:08, 3/3) before Groq's daily quota ran out; all other cases are covered by regression tests built from the live text.
-- **Last verified commit and CI:** `7311bf6752871e0cf811bc41b3038e1969af59b6`, GitHub Actions run 44549309602. All three jobs succeeded (Ubuntu Node 22, Ubuntu Node 24, Windows Node 24). The changes since then need a commit, after which CI runs on that commit.
+- **Final code:** commit `83a5d1139c69fac6581d82ded42668552e0a7756` ("Final evaluation and docs updated"). The commit after it changes documentation, the evaluation report, ground-truth review labels, the 3 November screenshot, and the report re-render tool (`evals/live-runner.ts --from` now also recomputes completeness grades); no agent code changed.
+- **CI:** GitHub Actions run 44693956464 on 83a5d11: **success**, all three jobs (Ubuntu Node 22, Ubuntu Node 24, Windows Node 24), each with clean install, typecheck, lint, tests, offline evaluation, the report-up-to-date check and build.
+- **Fresh clone of 83a5d11** (`git clone` from GitHub, no `.env`, 2026-11-20): `npm install` ok · `npm run typecheck` 0 errors · `npm run lint` clean · `npm test` **226/226** (15 files) · `npm run eval` **54/54** (report content identical; only line endings differ under `core.autocrlf`) · `npm run build` ok · `npm run dev`: UI served, demo data seeded, `/api/health` names the missing keys, and chat returns a clear `NOT_CONFIGURED` error.
+- **Live, final commit:** full five-case run (2026-11-20 07:57 UTC, real Groq + Tavily, default configuration) on the final code: **5/5 automatic checks, 9 correct / 0 abstained / 0 wrong** against human-confirmed ground truth. Hand-graded: Cursor control complete. Every answer was read against its rows and sources; the remaining prose residue is listed above. Shown in full in [evals/LIVE_REPORT.md](../evals/LIVE_REPORT.md). (An earlier attempt the same morning ran out of daily model quota; the run history records it.)
+- **Live, development sequence:** across nine complete runs while fixes were being made (06:30–07:06): 77 correct / 4 abstained / 0 wrong (graded at the time against provisional ground truth; no expectation changed when it was confirmed).
+- **Totals across all ten complete runs:** 86 correct / 4 abstained / 0 wrong / 0 missing. No run gave a confident verdict the ground truth contradicts.

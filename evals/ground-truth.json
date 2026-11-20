@@ -1,5 +1,5 @@
 {
-  "description": "Ground truth for grading live-eval verdicts against the seeded baselines. Each entry quotes the vendor's own page. Review states: 'provisional' (not yet re-opened), 'agent-verified YYYY-MM-DD' (an AI agent opened the page and found the quoted text), 'human-confirmed' (a person opened and checked it). Grades are reported as PROVISIONAL unless every graded entry is 'human-confirmed'. Entries whose price was not visible have no 'expected' and are not graded (never guess). Expectations change only when official evidence justifies it, never to make the system pass; every change is logged in 'changeLog'.",
+  "description": "Ground truth for grading live-eval verdicts against the seeded baselines. Each entry quotes the vendor's own page. Review states: 'provisional' (not yet re-opened), 'agent-verified YYYY-MM-DD' (an AI agent opened the page and found the quoted text), 'human-confirmed' (a person opened and checked it). Grades are reported as PROVISIONAL unless every graded entry is 'human-confirmed' (all graded entries were human-confirmed on 2026-11-20). Entries whose price was not visible have no 'expected' and are not graded (never guess). Expectations change only when official evidence justifies it, never to make the system pass; every change is logged in 'changeLog'.",
   "fetchedAt": "2026-11-19",
   "methods": {
     "page-fetch": "automated fetch of the official page text (no JavaScript rendering)",
@@ -19,7 +19,9 @@
           ],
           "dimension": "price_amount"
         },
-        "review": "agent-verified 2026-11-19"
+        "review": "human-confirmed",
+        "agentCheck": "agent-verified 2026-11-20 (re-opened supabase.com/pricing: Pro $25)",
+        "humanConfirmed": "2026-11-20 (project author opened the official page and checked the quoted text)"
       },
       {
         "subject": "Railway",
@@ -33,7 +35,9 @@
           ],
           "dimension": "price_amount"
         },
-        "review": "agent-verified 2026-11-19 (also docs.railway.com/pricing: '| **Hobby** | $5/mo |')"
+        "review": "human-confirmed",
+        "agentCheck": "agent-verified 2026-11-20 (re-opened railway.com/pricing: 'Hobby $5/mo')",
+        "humanConfirmed": "2026-11-20 (project author opened the official page and checked the quoted text)"
       },
       {
         "subject": "Neon",
@@ -54,7 +58,9 @@
           "unknownTimingChange": "abstained",
           "note": "Flat $19/month (seed) vs usage-based now, but the change predates the 17 Nov 2026 conversation: Neon's blog post 'New usage-based pricing' (https://neon.com/blog/new-usage-based-pricing, byline 'Aug 14, 2025') and changelog (https://neon.com/docs/changelog/2025-11-07, 'Launch plan: Now $0.106 per CU-hour (previously $0.14)') show Launch was usage-based in 2025. Correct: the earlier answer was already out of date. 'changed' with unknown timing (difference reported, not claimed to be since the conversation) = abstained on timing. 'changed' claimed after the conversation, or 'unchanged' = wrong."
         },
-        "review": "agent-verified 2026-11-19 (pricing page: 'You pay $0.106 per CU-hour'; blog byline 'Mike Jerome–Product Manager Aug 14, 2025' and 'Launch compute is $0.106 per CU-hour' found in the fetched page text)"
+        "review": "human-confirmed",
+        "agentCheck": "agent-verified 2026-11-20 (re-opened neon.com/pricing: '$0.106' for Launch; neon.com/blog/new-usage-based-pricing byline 'Aug 14, 2025')",
+        "humanConfirmed": "2026-11-20 (project author opened the official page and checked the quoted text)"
       },
       {
         "subject": "Render",
@@ -86,7 +92,9 @@
           ],
           "dimension": "price_amount"
         },
-        "review": "agent-verified 2026-11-19 (also github.com/features/copilot/plans: '$10USD per user / month')"
+        "review": "human-confirmed",
+        "agentCheck": "agent-verified 2026-11-20 (re-opened docs.github.com/en/copilot/get-started/plans: $10 / $19 / $39 USD)",
+        "humanConfirmed": "2026-11-20 (project author opened the official page and checked the quoted text)"
       },
       {
         "subject": "GitHub Copilot",
@@ -100,7 +108,9 @@
           ],
           "dimension": "price_amount"
         },
-        "review": "agent-verified 2026-11-19"
+        "review": "human-confirmed",
+        "agentCheck": "agent-verified 2026-11-20 (re-opened docs.github.com/en/copilot/get-started/plans: $10 / $19 / $39 USD)",
+        "humanConfirmed": "2026-11-20 (project author opened the official page and checked the quoted text)"
       },
       {
         "subject": "GitHub Copilot",
@@ -114,7 +124,9 @@
           ],
           "dimension": "price_amount"
         },
-        "review": "agent-verified 2026-11-19"
+        "review": "human-confirmed",
+        "agentCheck": "agent-verified 2026-11-20 (re-opened docs.github.com/en/copilot/get-started/plans: $10 / $19 / $39 USD)",
+        "humanConfirmed": "2026-11-20 (project author opened the official page and checked the quoted text)"
       }
     ],
     "demo-crm": [
@@ -130,7 +142,9 @@
           ],
           "dimension": "price_amount"
         },
-        "review": "agent-verified 2026-11-19"
+        "review": "human-confirmed",
+        "agentCheck": "agent-verified 2026-11-19",
+        "humanConfirmed": "2026-11-20 (project author opened the official page and checked the quoted text)"
       },
       {
         "subject": "HubSpot Sales Hub",
@@ -146,7 +160,9 @@
           "dimension": "price_amount",
           "note": "Page shows $90 and $100 per seat/month without explicitly binding each to a billing option. Seed: $90 billed annually. 'uncertain' is acceptable for that reason."
         },
-        "review": "agent-verified 2026-11-19"
+        "review": "human-confirmed",
+        "agentCheck": "agent-verified 2026-11-19",
+        "humanConfirmed": "2026-11-20 (project author opened the official page and checked the quoted text)"
       },
       {
         "subject": "Salesforce Sales Cloud",
@@ -165,7 +181,9 @@
           ],
           "note": "The Enterprise edition no longer appears; a price verdict on 'Enterprise' would be wrong."
         },
-        "review": "agent-verified 2026-11-19"
+        "review": "human-confirmed",
+        "agentCheck": "agent-verified 2026-11-19",
+        "humanConfirmed": "2026-11-20 (project author opened the official page and checked the quoted text)"
       },
       {
         "subject": "Zoho CRM",
@@ -195,7 +213,9 @@
         ],
         "url": "https://docs.github.com/en/copilot/get-started/plans",
         "quote": "Copilot Pro+ | $39 USD per month. ... Copilot Max | $100 USD per month",
-        "review": "agent-verified 2026-11-19"
+        "review": "human-confirmed",
+        "agentCheck": "agent-verified 2026-11-20 (re-opened docs.github.com plans page: Pro+ $39, Max $100)",
+        "humanConfirmed": "2026-11-20 (project author opened the official page and checked the quoted text)"
       }
     ],
     "demo-crm": [
@@ -208,7 +228,9 @@
         ],
         "url": "https://www.salesforce.com/sales/pricing/",
         "quote": "Core $ 195 ... Advanced $ 395 ... Max $ 550 USD/User/Month (Billed annually)",
-        "review": "agent-verified 2026-11-19"
+        "review": "human-confirmed",
+        "agentCheck": "agent-verified 2026-11-19",
+        "humanConfirmed": "2026-11-20 (project author opened the official page and checked the quoted text)"
       }
     ]
   },
@@ -218,8 +240,10 @@
       "url": "https://cursor.com/docs/account/pricing/legacy-cursor-plans",
       "quote": "Legacy table: '| Legacy plan | Price | Comparable plan on The X Subscription |' ... '| Pro | $20/mo | Premium ($30/mo) |'; help page: 'Legacy Cursor plans ... aren't available to new customers, but existing subscribers keep them until they switch or cancel.' Current plans (cursor.com/pricing): Plus $8, Premium $30, Super $100, Ultra $200 per month",
       "correctAnswer": "Pro is a legacy plan at $20/month; it is no longer offered to new customers (nearest current tier: Premium $30/month).",
-      "review": "agent-verified 2026-11-19; re-fetched directly 2026-11-20 (pages unchanged in substance)",
-      "note": "Not auto-graded (this control produces no comparison rows); graded by hand in docs/evaluation.md."
+      "review": "human-confirmed",
+      "note": "Not auto-graded (this control produces no comparison rows); graded by hand in docs/evaluation.md.",
+      "agentCheck": "agent-verified 2026-11-20 (re-opened cursor.com legacy-plans page and help page)",
+      "humanConfirmed": "2026-11-20 (project author opened the official page and checked the quoted text)"
     }
   },
   "changeLog": [
@@ -276,6 +300,18 @@
       "entry": "control-research (Cursor)",
       "change": "source URL → legacy-plans docs page; quote updated to the page text (no expectation changed)",
       "why": "re-fetched directly on 2026-11-20: '| Pro | $20/mo | Premium ($30/mo) |' and 'They aren't available to new customers'"
+    },
+    {
+      "date": "2026-11-20",
+      "entry": "Supabase, Railway, Neon, GitHub Copilot (prices + offering), Cursor control",
+      "change": "review → 'agent-verified 2026-11-20' after re-opening each official page (no expectation changed)",
+      "why": "re-check before submission. Still not 'human-confirmed': only a person can set that label (see docs/evaluation.md, 'Human review checklist')"
+    },
+    {
+      "date": "2026-11-20",
+      "entry": "all graded entries, offering truths and the Cursor control",
+      "change": "review → 'human-confirmed' (previous agent check kept in 'agentCheck'); no expectation changed",
+      "why": "the project author opened each official page and confirmed the quoted text. Render, AWS RDS, Pipedrive and Zoho stay ungraded (not verifiable)"
     }
   ]
 }

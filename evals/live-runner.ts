@@ -39,7 +39,7 @@ class CapturingLogger implements Logger {
 
 /**
  * `--from=<saved run json>`: re-render LIVE_REPORT.md from a saved run without calling any API.
- * Ground-truth grading and the entity check are recomputed with the current grader; every
+ * Ground-truth grading, offering (completeness) grading and the entity check are recomputed; every
  * other check and all system outputs are exactly as recorded in that run.
  */
 function rerenderFrom(file: string) {
@@ -49,13 +49,15 @@ function rerenderFrom(file: string) {
     const truth = groundTruth.cases[r.id as string] ?? [];
     r.graded = truth.map((e) => gradeEntry(e, comparisons));
     r.gradeSummary = summarizeGrades(r.graded as GradedEntry[]);
+    // Completeness (offering) grades are recomputed too, so review-label changes show up.
+    r.offeringGrades = (groundTruth.offering?.[r.id as string] ?? []).map((o) => gradeOffering(o, (r.offering ?? []) as Parameters<typeof gradeOffering>[1]));
     const checks = r.checks as Record<string, boolean>;
     checks.entitiesCovered = [...new Set(truth.map((t) => t.subject))].every((s) => comparisons.some((x) => rowMentionsEntity(x, s)));
     r.pass = Object.values(checks).every(Boolean);
     r.violations ??= [];
     r.planAttribution ??= { verified: 0, total: 0 };
   }
-  const note = `Re-rendered from the saved run \`${file.replace(/.*[\\/]/, "")}\`; ground-truth grading and the entity check were recomputed with the current grader, everything else is as recorded.`;
+  const note = `Re-rendered from the saved run \`${file.replace(/.*[\\/]/, "")}\`; ground-truth and completeness grading and the entity check were recomputed with the current grader and ground truth, everything else is as recorded.`;
   writeFileSync(join(here, "LIVE_REPORT.md"), renderReport(saved.ranAt, saved.provider, saved.results, note));
   console.log(`Re-rendered evals/LIVE_REPORT.md from ${file}`);
 }

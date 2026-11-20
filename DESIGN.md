@@ -46,10 +46,10 @@ Date phrases are resolved in code, in the user's timezone. An ambiguous phrase y
 
 - Accuracy is bounded by search coverage. JavaScript-rendered or bot-blocked pricing pages end up "uncertain".
 - The guard enforces specific facts; other wording is the model's.
-- Ground truth is agent-verified, not human-confirmed, and results vary between runs.
+- The answer key is small (12 human-confirmed entries; 4 vendors ungradable), and results vary between runs.
 
 With another week:
 1. Render and parse official pricing pages directly.
-2. Build a human-confirmed answer key, run nightly with calibration tracking.
+2. Grow the human-confirmed answer key and run it nightly with calibration tracking.
 3. Learn date disambiguation from user corrections.
 4. Add accounts and Postgres for multiple users.

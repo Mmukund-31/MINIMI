@@ -36,9 +36,9 @@ The app starts without keys; the UI banner and `/api/health` say what's missing.
 
 ![Postgres since last Tuesday: Neon's flat-to-usage change found on Neon's own blog dated 2025-08-14, so the earlier answer was already out of date (not a change since); Supabase and Railway unchanged; Render and AWS unverified](docs/screenshots/postgres.png)
 
-![3 November recall: Copilot Pro, Business and Enterprise prices unchanged; Pro+ and Max listed as also offered now](docs/screenshots/nov3.png)
+![3 November recall: Copilot Pro, Business and Enterprise prices unchanged on GitHub's docs; Student, Pro+ and Max listed as also offered now](docs/screenshots/nov3.png)
 
-Screenshots are from the app against live Groq + Tavily (CRM and Postgres on 2026-11-20, 3 November on 2026-11-19). Live output varies between runs.
+Screenshots are from the app against live Groq + Tavily on 2026-11-20 (3 November on the final commit). Live output varies between runs.
 
 Every row in the table carries a **status** (changed / unchanged / uncertain / not comparable) and the **dimension** it concerns (price, pricing model, billing terms, currency, plan availability, features). Sources show whether they are the vendor's own page or third-party, plus their publish date (or "no publish date").
 
@@ -55,7 +55,7 @@ flowchart LR
   O --> R[Research engine<br/>evidence validator · price parser<br/>change detector · citation filters]
 ```
 
-`validate → resolve dates → analyze → recall memory → plan → search → extract evidence → verify → compare → stream answer → filter/repair citations → persist`. Each stage reports progress over SSE (the UI shows it live), runs within a budget, and degrades instead of failing. A failed search, invalid model JSON, a rate-limited model or a missing key yields a qualified answer, not a crash.
+`validate → resolve dates → analyze → recall memory → plan → search → extract evidence → verify → compare → stream answer → filter/repair citations → persist`. Each stage reports progress over SSE (the UI shows it live) and runs within a budget. The pipeline handles missing credentials, invalid structured output and provider failures (including exhausted model or search quotas) with explicit errors or qualified partial answers, rather than silently presenting unverified facts.
 
 ```
 apps/api        Fastify routes: health, conversations, chat (SSE)
@@ -84,13 +84,13 @@ evals/          offline scenarios, live runner, grading, ground truth, reports
 |---|---|---|
 | `npm test` | 226 unit + integration tests (Fastify inject, deterministic doubles, no network) | 226/226 |
 | `npm run eval` | 54 deterministic scenarios: dates, memory, research, pricing, completeness, updates, multi-turn, uncertainty, adversarial, the 3 demos. Report: [evals/REPORT.md](evals/REPORT.md) | 54/54 |
-| `npm run eval:live` | the 3 demos + 2 controls against real Groq + Tavily. Structural + product-update checks, completeness grading, and verdict grading against [human-reviewable ground truth](evals/ground-truth.json). Report: [evals/LIVE_REPORT.md](evals/LIVE_REPORT.md) | 2026-11-20, nine complete runs: 77 correct / 4 abstained / **0 wrong** (provisional ground truth); last complete run 5/5 auto checks, 9/0/0. [Details](docs/evaluation.md#live-validation-2026-11-20) |
+| `npm run eval:live` | the 3 demos + 2 controls against real Groq + Tavily. Structural + product-update checks, completeness grading, and verdict grading against [human-reviewable ground truth](evals/ground-truth.json). Report: [evals/LIVE_REPORT.md](evals/LIVE_REPORT.md) | **Final commit:** full five-case run passed 5/5 automatic checks, 9 correct / 0 abstained / 0 wrong against human-confirmed ground truth; the Cursor control was complete. Across nine earlier complete runs during iterative development: 77 correct, 4 abstained, 0 wrong. [Details](docs/evaluation.md#live-validation-2026-11-20) |
 | `npm run eval:perf` | searches, LLM calls, tokens and per-stage latency computed from saved live runs (no API calls) | see [docs/evaluation.md](docs/evaluation.md) |
 | `npm run lint` · `npm run typecheck` · `npm run build` | ESLint, strict tsc, production build | clean |
 
 CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs a clean `npm ci`, typecheck, lint, tests, offline evaluation and build on Ubuntu (Node 22 and 24) and Windows (Node 24).
 
-Offline scenarios test the deterministic machinery against known model outputs. They don't measure live model quality. The live suite does, graded against ground truth taken from official pages and **marked provisional until a person confirms it** (currently agent-verified, not human-confirmed). Automatic checks don't judge answer prose. A code-level answer guard enforces the facts that live runs showed the model dropping or contradicting: "not checked" vs "none found", unverified prices called unchanged, launches no dated row supports, when a change happened, "not comparable" presented as a change, legacy plans, and prices that appear in no source. Other wording is still the model's.
+Offline scenarios test the deterministic machinery against known model outputs. They don't measure live model quality. The live suite does, graded against ground truth taken from official pages. **Every graded entry was human-confirmed on 2026-11-20** (the project author opened each page); vendors whose prices can't be retrieved (Render, AWS RDS, Pipedrive, Zoho) stay ungraded rather than guessed. Automatic checks don't judge answer prose. A code-level answer guard enforces the facts that live runs showed the model dropping or contradicting: "not checked" vs "none found", unverified prices called unchanged, launches no dated row supports, when a change happened, "not comparable" presented as a change, legacy plans, and prices that appear in no source. Other wording is still the model's.
 
 ## Known limitations
 

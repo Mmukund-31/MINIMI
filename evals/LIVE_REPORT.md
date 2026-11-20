@@ -5,7 +5,7 @@ Fresh temporary database seeded with the labelled demo conversations; search cac
 
 **Automatic checks (pass/fail):** completed · retrieved the right earlier conversation · searched when expected · every [S#] resolves to a retrieved source · research answers cite something · every vendor from the earlier conversation has a comparison row · structural checks (no verdict without an official source or an explicit third-party qualification, no amount change across incompatible terms, no 'changed' resting on a page published before the conversation).
 
-**Ground-truth grading** uses [ground-truth.json](ground-truth.json) (official pages fetched 2026-11-19). Entries not marked `human-confirmed` make the grade **PROVISIONAL**. *abstained* = honest uncertain/not-comparable where a verdict was possible; *wrong* = a confident verdict the ground truth contradicts.
+**Ground-truth grading** uses [ground-truth.json](ground-truth.json). Official pages were first fetched 2026-11-19; the project author re-reviewed the expectations on 2026-11-20 and marked every graded entry `human-confirmed` (a review date, separate from the run date above). Every grade in this run uses `human-confirmed` entries, so none is provisional. Vendor/plan entries whose price could not be verified on the official page have no expected value and stay ungraded (never guessed). *abstained* = honest uncertain/not-comparable where a verdict was possible; *wrong* = a confident verdict the ground truth contradicts.
 
 | Case | Auto checks | Ground truth (correct / abstained / wrong / missing · ungraded) | Plan attribution verified | Latency | LLM calls | Searches | Tokens | Evidence kept / rejected |
 |---|---|---|---|---|---|---|---|---|
@@ -194,7 +194,7 @@ I don’t have a record of a prior conversation with you, so I’m starting fres
 
 ## Run history
 
-Every complete live run saved in `evals/results/` (checks and grades as recorded by the code of that time; earlier runs had fewer checks; live results vary because search results and model outputs vary).
+Every complete live run saved in `evals/results/` (checks and grades as recorded by the code and ground truth of that time, not re-graded with the current grader; grades recorded before the human review on 2026-11-20, including that morning's development runs, were made against then-provisional ground truth, and the review changed no expectation; earlier runs had fewer checks; live results vary because search results and model outputs vary).
 
 | Run (UTC) | Auto checks | Ground truth correct / abstained / wrong / missing | Notes |
 |---|---|---|---|

@@ -18,7 +18,7 @@ import { createRuntime, loadConfig, loadDotEnv, missingCredentials, type AgentEv
 import { gradeEntry, gradeOffering, rowMentionsEntity, structuralChecks, summarizeGrades, updateChecks, type GradedEntry, type GroundTruthEntry, type OfferingGrade, type OfferingTruth } from "./grading";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const groundTruth = JSON.parse(readFileSync(join(here, "ground-truth.json"), "utf8")) as { fetchedAt: string; cases: Record<string, GroundTruthEntry[]>; offering?: Record<string, OfferingTruth[]> };
+const groundTruth = JSON.parse(readFileSync(join(here, "ground-truth.json"), "utf8")) as { fetchedAt: string; humanReviewedAt?: string; cases: Record<string, GroundTruthEntry[]>; offering?: Record<string, OfferingTruth[]> };
 // Groq counts requested max_tokens against the per-minute limit; consecutive research cases need a pause.
 const PAUSE_MS = Number(process.env.LIVE_EVAL_PAUSE_MS ?? 20_000);
 
@@ -208,7 +208,7 @@ function renderReport(stamp: string, llm: { provider: string; models: string[] }
     "",
     "**Automatic checks (pass/fail):** completed · retrieved the right earlier conversation · searched when expected · every [S#] resolves to a retrieved source · research answers cite something · every vendor from the earlier conversation has a comparison row · structural checks (no verdict without an official source or an explicit third-party qualification, no amount change across incompatible terms, no 'changed' resting on a page published before the conversation).",
     "",
-    `**Ground-truth grading** uses [ground-truth.json](ground-truth.json) (official pages fetched ${groundTruth.fetchedAt}). Entries not marked \`human-confirmed\` make the grade **PROVISIONAL**. *abstained* = honest uncertain/not-comparable where a verdict was possible; *wrong* = a confident verdict the ground truth contradicts.`,
+    `**Ground-truth grading** uses [ground-truth.json](ground-truth.json). Official pages were first fetched ${groundTruth.fetchedAt}${groundTruth.humanReviewedAt ? `; the project author re-reviewed the expectations on ${groundTruth.humanReviewedAt} and marked every graded entry \`human-confirmed\` (a review date, separate from the run date above)` : ""}. ${results.some((r) => (r.gradeSummary as { provisional?: boolean } | undefined)?.provisional) ? "Some graded entries in this run are not `human-confirmed`, so their grades are **PROVISIONAL**." : "Every grade in this run uses `human-confirmed` entries, so none is provisional."} Vendor/plan entries whose price could not be verified on the official page have no expected value and stay ungraded (never guessed). *abstained* = honest uncertain/not-comparable where a verdict was possible; *wrong* = a confident verdict the ground truth contradicts.`,
     "",
     "| Case | Auto checks | Ground truth (correct / abstained / wrong / missing · ungraded) | Plan attribution verified | Latency | LLM calls | Searches | Tokens | Evidence kept / rejected |",
     "|---|---|---|---|---|---|---|---|---|",
@@ -258,7 +258,7 @@ function renderReport(stamp: string, llm: { provider: string; models: string[] }
   }
   const history = runHistory();
   if (history.length) {
-    lines.push("## Run history", "", "Every complete live run saved in `evals/results/` (checks and grades as recorded by the code of that time; earlier runs had fewer checks; live results vary because search results and model outputs vary).", "", "| Run (UTC) | Auto checks | Ground truth correct / abstained / wrong / missing | Notes |", "|---|---|---|---|", ...history, "");
+    lines.push("## Run history", "", `Every complete live run saved in \`evals/results/\` (checks and grades as recorded by the code and ground truth of that time, not re-graded with the current grader; grades recorded before the human review${groundTruth.humanReviewedAt ? ` on ${groundTruth.humanReviewedAt}, including that morning's development runs,` : ""} were made against then-provisional ground truth, and the review changed no expectation; earlier runs had fewer checks; live results vary because search results and model outputs vary).`, "", "| Run (UTC) | Auto checks | Ground truth correct / abstained / wrong / missing | Notes |", "|---|---|---|---|", ...history, "");
   }
   return lines.join("\n");
 }

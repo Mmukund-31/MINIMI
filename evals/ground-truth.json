@@ -1,6 +1,7 @@
 {
   "description": "Ground truth for grading live-eval verdicts against the seeded baselines. Each entry quotes the vendor's own page. Review states: 'provisional' (not yet re-opened), 'agent-verified YYYY-MM-DD' (an AI agent opened the page and found the quoted text), 'human-confirmed' (a person opened and checked it). Grades are reported as PROVISIONAL unless every graded entry is 'human-confirmed' (all graded entries were human-confirmed on 2026-11-20). Entries whose price was not visible have no 'expected' and are not graded (never guess). Expectations change only when official evidence justifies it, never to make the system pass; every change is logged in 'changeLog'.",
   "fetchedAt": "2026-11-19",
+  "humanReviewedAt": "2026-11-20",
   "methods": {
     "page-fetch": "automated fetch of the official page text (no JavaScript rendering)",
     "official-domain-search": "official-domain search excerpt (Tavily include_domains), independent of the system's LLM extraction"

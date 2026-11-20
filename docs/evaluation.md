@@ -315,3 +315,47 @@ Everything below was verified against commit **83a5d11**, the final code, and it
 - **Live, final commit:** full five-case run (2026-11-20 07:57 UTC, real Groq + Tavily, default configuration) on the final code: **5/5 automatic checks, 9 correct / 0 abstained / 0 wrong** against human-confirmed ground truth. Hand-graded: Cursor control complete. Every answer was read against its rows and sources; the remaining prose residue is listed above. Shown in full in [evals/LIVE_REPORT.md](../evals/LIVE_REPORT.md). (An earlier attempt the same morning ran out of daily model quota; the run history records it.)
 - **Live, development sequence:** nine complete iterative runs (06:30–07:06), each on the code as it stood while fixes were being made. These are **not** nine runs of an identical final build; the code changed between most of them. Together: 77 correct / 4 abstained / 0 wrong (graded at the time against provisional ground truth; no expectation changed when it was confirmed).
 - **Totals across all ten complete runs** (nine iterative development runs plus the one run of the final commit): 86 correct / 4 abstained / 0 wrong / 0 missing. No run gave a confident verdict the ground truth contradicts.
+
+## Routing change: chat · direct · deep (2026-11-20)
+
+**Why.** The review of the final build found the agent too narrow and slow for everyday questions. Every web question ran the pricing pipeline: the extractor looked "mainly for prices", the answer model saw only extracted facts and source titles, and latency was 16 s at the median (p90 42 s). Questions that don't involve an earlier conversation or a price check on a named product now take a direct path (see [architecture.md](architecture.md#execution-modes)).
+
+**Offline (deterministic).** `npm test` **251/251** (18 files; new: `direct.test.ts`, `import.test.ts`, `routing.test.ts`) · `npm run eval` **60/60** (new category `general`, G01–G06: factual answer in 2 calls, concurrent comparison queries, exactly one broadened search on thin coverage, injection quarantine on the direct path, search-failure acknowledgement, follow-up context) · typecheck, lint and build clean.
+
+**Live (real Groq + Tavily, cases run one at a time with `--only`, so LIVE_REPORT.md was not regenerated):**
+
+| Case | Path | Result | Latency | LLM calls | Searches | Tokens |
+|---|---|---|---|---|---|---|
+| general-fact (Node.js latest + LTS end) | direct | pass; answer cites nodejs.org for the release and the LTS date | 7.4 s | 2 | 2 | 7,378 |
+| control-chat | chat | pass (after the fix below: 2.0 s, 2,286 tokens) | 1.7 s | 2 | 0 | 2,347 |
+| general-compare (Bun vs Deno) | direct | pass; structured comparison, every bullet cited | 8.0 s | 2 | 3 | 7,451 |
+| general-news (AI releases this month) | direct | pass | 8.0 s → 8.4 s | 2 | 2–3 | 7,340–7,875 |
+| demo-postgres (regression check) | deep | pass; 3 correct / 0 abstained / 0 wrong · 2 ungraded | 15.0 s | 4 | 10 | 12,609 |
+
+**Problems found by reading the answers, and fixes:**
+
+| Problem | Fix |
+|---|---|
+| News answer's table had a "Notable details" column with characterisations no source stated | Prompt rule: never embellish; every table cell must come from a cited source; drop a column rather than guess (`direct@2`). The re-run cited every cell. |
+| Instagram and LinkedIn posts ranked as sources | Added to the low-trust domain list (ranking penalty) |
+| Chat reply listed generic assistant abilities (cooking, resumes), not what this agent does | Prompt rule: describe actual strengths when asked. The 20B model ignored it, so chat answers now also stream on the larger model (idle on that path). The re-run described web research with citations, recall of earlier conversations and flagging what is not verifiable |
+
+**Still variable:** direct answers rely on the model's reading of the excerpts. A re-run of the news case still had one label in the model's own words. Code verifies citations, URLs and prices, not every phrase.
+
+## Research-engine round: intents, bounded loop, claim gate (2026-11-20)
+
+**Why.** Review feedback: the answer guard was growing as pricing-specific text rules; search results were relevant without fully answering; research latency was 15–22 s; five live cases were smoke tests, not evidence of general research quality; and the CRM answer said "no additional features were noted" while its table held a possible Zoho update. This round made the engine general instead of adding rules. See [DESIGN.md](../DESIGN.md) and [architecture.md](architecture.md#research-intents-and-pipelines).
+
+**What changed:** typed intents (chat, fact_lookup, general_research, comparison, historical_audit, pricing_diff) decided in code; a bounded adaptive loop (round 1 → claim extraction verified in code → entities × aspects coverage → one targeted query per gap → stop); a general evidence model (claims with verbatim quotes, source authority, confidence computed in code); a streaming claim gate (figures, dates and versions checked against cited sources before display; derived totals; cell-level table checks; code passes through); required findings for the deep pipeline; official-sources-first and version-aware source selection; full entity naming; coverage, differences between sources and claim-check results rendered by the UI from metadata.
+
+**Deterministic:** `npm test` 282/282 (new: research.test.ts, claims-and-coverage.test.ts, routing additions) · `npm run eval` 64/64 (new G07 gap follow-up, G08 sources that differ, G09 claim gate, G10 required findings on the CRM fixture) · typecheck, lint, build clean.
+
+**Live (real Groq + Tavily), three kinds of evidence kept apart:**
+
+1. *Ground truth (human-confirmed, challenge prompts):* 8 correct / 1 abstained / **0 wrong**.
+2. *Automatic checks:* full run 21/28. Every failure was diagnosed, fixed (5 agent issues) or corrected in the checker (2, disclosed), and re-run: 7/7 then pass. The full suite was not re-run after the fixes, to save quota. Details and every answer: [LIVE_REPORT.md](../evals/LIVE_REPORT.md).
+3. *General-research metrics (full run, 19 lookup/research cases):* relevance 17/17 · routing 6/6 · coverage 70/72 cells (31 quote-verified) · citation precision 48/56 statements with figures matched their cited source (14 re-cited, 8 removed before display) · source authority **16% official/primary** (low; it motivated official-sources-first, which is not yet re-measured on a full run) · adaptive second round in 5/19 · factual correctness **pending human review**.
+
+**Latency by pipeline (full run, p50 / p90 total):** chat 1.9 / 2.0 s · lookup 6.2 / 10.2 s · research 10.4 / 15.4 s · deep 15.7 / 18.2 s. Search dominates (Tavily advanced: 2.5–7.7 s per round); the answer stage is 0.9–2.8 s. First status arrives within milliseconds. First answer words come after each sentence is checked, which is now sentence by sentence (previously line by line).
+
+**Problems found by reading answers** (no automatic check caught them): a third-party "$4/user" Copilot Business price in a comparison (the gate verifies figures against the *cited* source, not the source's correctness); a leftover v3 config hint in the Tailwind v4 answer. Both are listed for human review.

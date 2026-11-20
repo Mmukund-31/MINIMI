@@ -1,6 +1,8 @@
 import { formatLocal } from "../temporal/resolver";
 import { planLabel, truncate } from "../shared/text";
 import type { Comparison, Evidence, HistoricalClaim, MemoryExchange, MemorySummary, Message, OfferingNote, PlanStatusNote, Source } from "../shared/types";
+import { cellLabel, type Coverage, type VerifiedClaim } from "../research/general-evidence";
+import type { RequiredFinding } from "./required-findings";
 
 /**
  * Context assembly. Every block is size-bounded so prompts stay within the
@@ -116,6 +118,70 @@ export interface SynthesisInput {
   notes: string[];
   searchAttempted: boolean;
   maxChars: number;
+  /** Findings the answer must state (see required-findings.ts). */
+  mustMention?: RequiredFinding[];
+}
+
+export interface DirectInput {
+  question: string;
+  nowLocal: string;
+  timezone: string;
+  recent: Message[];
+  sources: Source[];
+  notes: string[];
+  /** "not_needed" for chat; otherwise whether the search ran. */
+  searchStatus: "not_needed" | "ok" | "unavailable" | "failed";
+  /** Terms to centre excerpts on (entities and question words). */
+  focusTerms: string[];
+  maxChars: number;
+  /** Research pipeline: quote-verified claims and the coverage matrix. */
+  claims?: VerifiedClaim[];
+  coverage?: Coverage;
+}
+
+const STOPWORDS = new Set(["what", "which", "when", "where", "who", "whom", "whose", "why", "how", "the", "and", "for", "with", "that", "this", "from", "are", "was", "were", "does", "did", "can", "could", "should", "would", "about", "into", "than", "then", "there", "their", "your", "you", "have", "has", "had", "any", "best", "is", "it", "of", "to", "in", "on", "a", "an", "me", "my", "i", "do"]);
+
+/** Content words of a question, used to centre page excerpts on what was asked. */
+export function questionTerms(question: string): string[] {
+  return [...new Set(question.toLowerCase().match(/[a-z0-9][a-z0-9.+#-]{2,}/g) ?? [])].filter((w) => !STOPWORDS.has(w)).slice(0, 12);
+}
+
+/**
+ * Context for direct answers: the model reads bounded, query-focused excerpts of each
+ * source (best-ranked first gets the same budget as the rest; nothing is summarised by
+ * another model call, which keeps latency to one search round + one streamed call).
+ */
+export function buildDirectContext(i: DirectInput): string {
+  const budget = i.maxChars;
+  const parts: string[] = [];
+  parts.push(`<now>${i.nowLocal} (${i.timezone})</now>`);
+  const recent = formatRecent(i.recent, Math.floor(budget * 0.15));
+  if (recent) parts.push(`<recent_conversation>\n${recent}\n</recent_conversation>`);
+  let excerptShare = 0.7;
+  if (i.claims && i.coverage) {
+    const lines = i.claims.map((c) => `- [${c.sourceId}] ${[c.entity, c.aspect].filter(Boolean).join(" · ") || "general"}: ${c.claim} (confidence ${c.confidence})`);
+    parts.push(`<verified_claims>\n${truncate(lines.join("\n") || "(none)", Math.floor(budget * 0.3))}\n</verified_claims>`);
+    const cells = i.coverage.cells.map((c) => `- ${cellLabel(c, "the question")}: ${c.status}${c.sourceIds.length ? ` (${c.sourceIds.map((s) => `[${s}]`).join("")})` : ""}`);
+    parts.push(`<coverage rounds="${i.coverage.rounds}">\n${cells.join("\n")}\n</coverage>`);
+    if (i.coverage.conflicts.length) {
+      const diffs = i.coverage.conflicts.map((d) => `- ${cellLabel(d)}: ${d.values.map((v) => `${v.value} [${v.sourceId}]`).join(" vs ")}`);
+      parts.push(`<sources_differ>\n${diffs.join("\n")}\n</sources_differ>`);
+    }
+    excerptShare = 0.45;
+  }
+  if (i.sources.length > 0) {
+    const per = Math.max(400, Math.floor((budget * excerptShare) / i.sources.length) - 160);
+    const blocks = i.sources.map((s) => {
+      const body = focusedExcerpt(`${s.snippet}\n${s.content ?? ""}`.trim(), per, i.focusTerms).replace(/<\/?source[^>]*>/gi, "");
+      const date = s.publishedAt?.slice(0, 10) ?? s.pageDate?.date?.slice(0, 10) ?? "unknown";
+      return `<source id="${s.id}" domain="${s.sourceDomain}" kind="${s.kind}" date="${date}">\nTitle: ${truncate(s.title, 160)}\n${body}\n</source>`;
+    });
+    parts.push(`<sources>\n${blocks.join("\n")}\n</sources>`);
+  }
+  if (i.searchStatus !== "not_needed") parts.push(`<search_status>${i.searchStatus}</search_status>`);
+  if (i.notes.length > 0) parts.push(`<notes>\n${i.notes.map((n) => `- ${n}`).join("\n")}\n</notes>`);
+  parts.push(`<question>${i.question}</question>`);
+  return parts.join("\n\n");
 }
 
 export function buildSynthesisContext(i: SynthesisInput): string {
@@ -143,6 +209,8 @@ export function buildSynthesisContext(i: SynthesisInput): string {
     );
     parts.push(`<comparisons>\n${truncate(rows.join("\n"), Math.floor(budget * 0.2))}\n</comparisons>`);
   }
+
+  if (i.mustMention?.length) parts.push(`<must_mention>\n${i.mustMention.map((f) => `- ${f.statement}`).join("\n")}\n</must_mention>`);
 
   if (i.offering?.length) {
     const lines = i.offering.map((o) => `- ${o.subject}: ${o.plansNotDiscussed.map((p) => `${p.plan} (${p.value}) [${p.sourceId}]`).join("; ")}`);

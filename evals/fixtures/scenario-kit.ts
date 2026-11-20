@@ -94,8 +94,12 @@ export function analysis(partial: Partial<Analysis>): Analysis {
     temporalExpressions: [],
     asksAboutPricing: false,
     asksAboutProductUpdates: false,
+    searchQueries: [],
+    researchIntent: partial.needsMemory ? "historical_audit" : partial.needsWebSearch === false ? "chat" : partial.asksAboutPricing ? "pricing_diff" : "fact_lookup",
+    aspects: [],
+    officialDomains: [],
     ...partial,
-  };
+  } as Analysis;
 }
 
 export function plan(partial: Partial<Plan>): Plan {

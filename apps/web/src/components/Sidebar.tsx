@@ -1,4 +1,5 @@
-import { MessageSquare, Plus, Search, Trash2 } from "lucide-react";
+import { useRef } from "react";
+import { MessageSquare, Plus, Search, Trash2, Upload } from "lucide-react";
 import type { ConversationListItem, Health } from "../lib/api";
 
 function relative(iso: string | null): string {
@@ -16,9 +17,12 @@ export function Sidebar(props: {
   onSelect: (id: string) => void;
   onNew: () => void;
   onDelete: (id: string) => void;
+  /** Receives the parsed JSON of a chosen file (format: docs/import-example.json). */
+  onImport: (data: unknown) => void;
   health: Health | null;
 }) {
-  const { conversations, activeId, onSelect, onNew, onDelete, health } = props;
+  const { conversations, activeId, onSelect, onNew, onDelete, onImport, health } = props;
+  const fileRef = useRef<HTMLInputElement>(null);
   return (
     <aside className="flex h-full w-72 shrink-0 flex-col border-r border-zinc-200 bg-zinc-50/70 dark:border-zinc-800 dark:bg-zinc-900/40">
       <div className="flex items-center gap-2 px-4 pt-4 pb-3">
@@ -37,6 +41,28 @@ export function Sidebar(props: {
         >
           <Plus className="h-4 w-4" /> New conversation
         </button>
+        <button
+          onClick={() => fileRef.current?.click()}
+          title="Import a past conversation (JSON with timestamps) to test date-based recall"
+          className="mt-1.5 flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-xs text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-800 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+        >
+          <Upload className="h-3.5 w-3.5" /> Import past conversation
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = "";
+            if (!file) return;
+            file
+              .text()
+              .then((t) => onImport(JSON.parse(t)))
+              .catch(() => alert("That file isn't valid JSON. See docs/import-example.json for the format."));
+          }}
+        />
       </div>
       <nav className="mt-3 flex-1 overflow-y-auto px-2 pb-3" aria-label="Conversation history">
         {conversations.length === 0 && <div className="px-3 py-6 text-center text-xs text-zinc-500">No conversations yet</div>}
@@ -53,6 +79,7 @@ export function Sidebar(props: {
               <div className="truncate text-zinc-800 dark:text-zinc-200">{c.title.replace(/^\[Demo\]\s*/, "")}</div>
               <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-zinc-500">
                 {c.seeded && <span className="rounded bg-violet-100 px-1 font-medium text-violet-700 dark:bg-violet-950 dark:text-violet-300">seeded demo</span>}
+                {c.imported && <span className="rounded bg-sky-100 px-1 font-medium text-sky-700 dark:bg-sky-950 dark:text-sky-300">imported</span>}
                 <span>{relative(c.lastMessageAt ?? c.updatedAt)}</span>
               </div>
             </div>

@@ -15,8 +15,43 @@ export const AnalysisSchema = z.object({
   temporalExpressions: z.array(z.string().max(60)).max(6).describe("Date/time phrases exactly as written, e.g. 'last Tuesday'."),
   asksAboutPricing: z.boolean(),
   asksAboutProductUpdates: z.boolean(),
+  searchQueries: z
+    .array(z.string().min(2).max(160))
+    .max(3)
+    .describe("1-3 web search queries that would answer the standalone question (empty if no search is needed)."),
+  researchIntent: z
+    .enum(["chat", "fact_lookup", "general_research", "comparison", "historical_audit", "pricing_diff"])
+    .describe("The kind of research the question needs."),
+  aspects: z
+    .array(z.string().min(2).max(60))
+    .max(6)
+    .describe("The specific facets the user asked about or the comparison criteria, short noun phrases (e.g. 'pricing model', 'free tier limits'). Empty if none stated."),
+  officialDomains: z
+    .array(z.string().max(80))
+    .max(3)
+    .describe("Official website domains of the named products/projects/organisations if you are confident (e.g. 'nodejs.org', 'react.dev'). Empty if unsure."),
 });
 export type Analysis = z.infer<typeof AnalysisSchema>;
+export type ResearchIntent = Analysis["researchIntent"];
+
+/**
+ * General evidence extraction (research pipeline): atomic claims with verbatim quotes, each
+ * tagged with the entity and aspect it answers so coverage can be computed in code.
+ */
+export const ClaimExtractionSchema = z.object({
+  claims: z
+    .array(
+      z.object({
+        sourceId: z.string().max(8),
+        entity: z.string().max(80).nullable().describe("Which of the listed entities the claim is about, or null."),
+        aspect: z.string().max(60).nullable().describe("Which of the listed aspects the claim answers, or null."),
+        claim: z.string().min(5).max(300).describe("One atomic factual statement, in your words."),
+        quote: z.string().min(8).max(300).describe("Verbatim span from the source that supports the claim."),
+      }),
+    )
+    .max(30),
+});
+export type ClaimExtraction = z.infer<typeof ClaimExtractionSchema>;
 
 export const PlanSchema = z.object({
   subjects: z

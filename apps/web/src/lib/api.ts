@@ -1,6 +1,6 @@
 import type { AgentEvent, Conversation, Message } from "@minimi/core/types";
 
-export type { AgentEvent, Comparison, Conversation, Message, SourceRef, Stage, MemorySummary } from "@minimi/core/types";
+export type { AgentEvent, Comparison, Conversation, Message, SourceRef, Stage, MemorySummary, ResearchMeta } from "@minimi/core/types";
 
 export interface ConversationListItem {
   id: string;
@@ -11,6 +11,7 @@ export interface ConversationListItem {
   lastMessageAt: string | null;
   messageCount: number;
   seeded: boolean;
+  imported?: boolean;
 }
 
 export interface Health {
@@ -50,6 +51,10 @@ export const api = {
   health: () => fetch("/api/health").then((r) => r.json() as Promise<Health>),
   listConversations: () => fetch("/api/conversations").then((r) => json<{ conversations: ConversationListItem[] }>(r)),
   getConversation: (id: string) => fetch(`/api/conversations/${id}`).then((r) => json<{ conversation: Conversation; messages: Message[] }>(r)),
+  importConversation: (body: unknown) =>
+    fetch("/api/conversations/import", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) =>
+      json<{ conversation: Conversation; messageCount: number }>(r),
+    ),
   deleteConversation: (id: string) =>
     fetch(`/api/conversations/${id}`, { method: "DELETE" }).then((r) => {
       if (!r.ok && r.status !== 204) throw new ApiError("HTTP_" + r.status, "Delete failed", false);

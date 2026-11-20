@@ -2,6 +2,13 @@
  * Domain types shared by the backend and (via the API contract) the frontend.
  * All timestamps are ISO-8601 strings in UTC.
  */
+import type { ClaimCheck } from "../agent/claim-gate";
+import type { Coverage, VerifiedClaim } from "../research/general-evidence";
+import type { ResearchIntent } from "../research/schemas";
+
+export type { ClaimCheck, ClaimCheckItem } from "../agent/claim-gate";
+export type { Coverage, CoverageCell, CoverageConflict, VerifiedClaim, ResearchEvidence } from "../research/general-evidence";
+export type { ResearchIntent } from "../research/schemas";
 
 export type Role = "user" | "assistant";
 
@@ -18,6 +25,8 @@ export interface ConversationMetadata {
   /** True for clearly-labelled demonstration data inserted by the seeder. */
   seeded?: boolean;
   seedLabel?: string;
+  /** Imported with its original timestamps via POST /api/conversations/import. */
+  imported?: boolean;
 }
 
 export interface Message {
@@ -31,6 +40,7 @@ export interface Message {
 
 export interface MessageMetadata {
   seeded?: boolean;
+  imported?: boolean;
   executionId?: string;
   status?: "complete" | "error";
   sources?: SourceRef[];
@@ -43,6 +53,8 @@ export interface MessageMetadata {
   notes?: string[];
   followUps?: string[];
   stats?: ExecutionStats;
+  /** Lookup/research pipelines: what was established and how the answer was checked. */
+  research?: ResearchMeta;
 }
 
 // ── Web search ────────────────────────────────────────────────────────────
@@ -232,8 +244,18 @@ export type Stage =
   | "search"
   | "evidence"
   | "compare"
+  | "coverage"
   | "synthesize"
   | "persist";
+
+export interface ResearchMeta {
+  intent: ResearchIntent;
+  /** Quote-verified claims (research pipeline). */
+  claims: VerifiedClaim[];
+  coverage: Coverage;
+  /** Claim gate results for the answer text. */
+  claimCheck: ClaimCheck;
+}
 
 export interface TokenUsage {
   inputTokens: number;
@@ -250,6 +272,14 @@ export interface ExecutionStats {
   totalMs: number;
   provider: string;
   models: string[];
+  /** Pipeline chosen in code: chat (no tools) · lookup · research (evidence + coverage loop) · deep (verified pricing/audit). */
+  mode?: "chat" | "lookup" | "research" | "deep";
+  intent?: ResearchIntent;
+  /** Research rounds run (lookup/research: 1 or 2). */
+  rounds?: number;
+  /** Milliseconds from request start to the first stage event and to the first answer token. */
+  firstStatusMs?: number;
+  firstTokenMs?: number;
 }
 
 /** Server-sent events emitted while answering. */

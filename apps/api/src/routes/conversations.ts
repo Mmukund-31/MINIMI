@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { AppError, isValidTimezone, type Runtime } from "@minimi/core";
+import { AppError, importConversation, isValidTimezone, type Runtime } from "@minimi/core";
 
 const IdParams = z.object({ id: z.string().regex(/^conv_[a-z0-9]{1,40}$/i) });
 const CreateBody = z.object({ title: z.string().max(120).optional(), timezone: z.string().max(64).optional() }).strict();
@@ -21,6 +21,7 @@ export const conversationRoutes =
           lastMessageAt: c.lastMessageAt,
           messageCount: c.messageCount,
           seeded: Boolean(c.metadata.seeded),
+          imported: Boolean(c.metadata.imported),
         })),
       };
     });
@@ -32,6 +33,16 @@ export const conversationRoutes =
       const conv = conversations.create({ title: body.data.title, timezone: tz });
       return reply.status(201).send({ conversation: conv });
     });
+
+    // Import a past conversation with its original timestamps (see core/memory/import.ts).
+    app.post(
+      "/conversations/import",
+      { bodyLimit: 1024 * 1024, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+      async (req, reply) => {
+        const conv = importConversation(runtime.repos, runtime.db, req.body, { defaultTimezone: runtime.config.timezone });
+        return reply.status(201).send({ conversation: conv, messageCount: messages.listByConversation(conv.id).length });
+      },
+    );
 
     app.get("/conversations/:id", async (req) => {
       const p = IdParams.safeParse(req.params);

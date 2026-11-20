@@ -13,7 +13,7 @@ const REPUTABLE_NEWS = new Set([
   "arstechnica.com", "cnbc.com", "ft.com", "theregister.com", "infoq.com", "siliconangle.com", "geekwire.com",
   "businessinsider.com", "forbes.com", "axios.com", "theinformation.com",
 ]);
-const LOW_TRUST = /(^|\.)(reddit\.com|quora\.com|pinterest\.|facebook\.com|x\.com|twitter\.com|tiktok\.com|youtube\.com)$/;
+const LOW_TRUST = /(^|\.)(reddit\.com|quora\.com|pinterest\.|facebook\.com|instagram\.com|threads\.net|linkedin\.com|x\.com|twitter\.com|tiktok\.com|youtube\.com)$/;
 
 const PRICING_HINT = /(pricing|prices?|plans?|cost|billing)/i;
 const CHANGELOG_HINT = /(changelog|release[-_ ]?notes?|releases|what'?s[-_ ]new|whats-new|blog|news|announc|press|launch|product[-_ ]updates?)/i;

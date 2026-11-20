@@ -10,6 +10,7 @@ const STAGES: Array<{ id: Stage; label: string }> = [
   { id: "search", label: "Searching the web" },
   { id: "evidence", label: "Verifying evidence against sources" },
   { id: "compare", label: "Comparing then vs. now" },
+  { id: "coverage", label: "Checking coverage (follow-up searches for gaps)" },
   { id: "synthesize", label: "Writing the answer" },
 ];
 

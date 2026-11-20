@@ -4,7 +4,7 @@ import type { LLMClient } from "../llm/client";
 import { UsageTracker } from "../llm/usage";
 import { MemoryRetriever, type MemoryResult } from "../memory/retrieval";
 import { addUnassessedUpdates, assessOffering, compareProductUpdates, comparePricing, explainMissingEvidence } from "../research/change-detector";
-import { looksLikeInjection, screenSources, validateEvidence, verifyHistoricalClaims } from "../research/evidence";
+import { looksLikeInjection, screenSources, sourceText, validateEvidence, verifyHistoricalClaims } from "../research/evidence";
 import { assessPlanStatus } from "../research/plan-status";
 import { timingEvidence } from "../research/timing";
 import { AnalysisSchema, EvidenceExtractionSchema, PlanSchema, type Analysis, type Plan } from "../research/schemas";
@@ -34,12 +34,19 @@ import type {
 import { resolveTemporal, type TemporalResolution } from "../temporal/resolver";
 import { buildGuardRules, dropUnsupportedPrices, enforceAnswerFacts } from "./answer-guard";
 import { attachMissingCitations, CitationFilter, finalizeAnswer, StreamUrlFilter } from "./citations";
-import { buildSynthesisContext, formatClaims, formatMemory, formatRecent, formatSourcesForExtraction } from "./context";
-import { enforceRouting, followUpSuggestions, heuristicAnalysis, wantsUpdateCheck } from "./heuristics";
+import { buildDirectContext, buildSynthesisContext, formatClaims, formatMemory, formatRecent, formatSourcesForExtraction, questionTerms } from "./context";
+import { chooseIntent, enforceRouting, followUpSuggestions, heuristicAnalysis, isTimeSensitive, pipelineFor, wantsUpdateCheck, type Pipeline } from "./heuristics";
+import { ClaimGate, type ClaimCheck } from "./claim-gate";
+import { ensureRequiredFindings, requiredFindings } from "./required-findings";
+import { assessCoverage, coverageSummary, gapQueries, namesEntity, verifyClaims, type Coverage, type VerifiedClaim } from "../research/general-evidence";
+import { ClaimExtractionSchema, type ResearchIntent } from "../research/schemas";
 import { finalizeSearchPlan, normalizeClaims, updateSearchedSubjects } from "../research/planner";
 import {
   ANALYZE_SYSTEM,
   analyzePrompt,
+  CLAIMS_SYSTEM,
+  claimsPrompt,
+  DIRECT_SYSTEM,
   EVIDENCE_SYSTEM,
   evidencePrompt,
   planPrompt,
@@ -74,6 +81,16 @@ export interface RunInput {
 }
 
 export const MAX_MESSAGE_CHARS = 4_000;
+/** Lookup/research: sources passed to the answer model, and the count below which coverage is "thin". */
+const MAX_LOOKUP_SOURCES = 8;
+const MAX_RESEARCH_SOURCES = 10;
+const MIN_USABLE_SOURCES = 3;
+/**
+ * Character budgets sized to Groq's free tier (8K tokens/minute per model, reserved output
+ * included): claim extraction runs on the fast model, the answer on the larger one.
+ */
+const DIRECT_CONTEXT_CHARS = 14_000;
+const CLAIMS_SOURCE_CHARS = 9_000;
 
 /** Mutable state of one execution; every transition goes through the orchestrator. */
 interface ExecutionState {
@@ -87,6 +104,13 @@ interface ExecutionState {
   notes: string[];
   temporal: TemporalResolution;
   analysis: Analysis;
+  /** Research intent and the pipeline that serves it, decided in code after analysis (see chooseIntent). */
+  intent: ResearchIntent;
+  mode: Pipeline;
+  /** Lookup/research pipelines. */
+  verifiedClaims: VerifiedClaim[];
+  coverage: Coverage | null;
+  claimCheck: ClaimCheck | null;
   memory: MemoryResult | null;
   plan: Plan | null;
   claims: HistoricalClaim[];
@@ -145,9 +169,16 @@ export class AgentOrchestrator {
     }
   }
 
-  private async runUnlocked(input: RunInput, emit: (e: AgentEvent) => void): Promise<Message> {
+  private async runUnlocked(input: RunInput, emitRaw: (e: AgentEvent) => void): Promise<Message> {
     const { config, repos } = this.deps;
     const started = Date.now();
+    // Latency instrumentation: time to the first status update and to the first answer token.
+    const timing: { firstStatus?: number; firstToken?: number } = {};
+    const emit = (e: AgentEvent) => {
+      if (e.type === "stage" && timing.firstStatus === undefined) timing.firstStatus = Date.now() - started;
+      if (e.type === "token" && timing.firstToken === undefined) timing.firstToken = Date.now() - started;
+      emitRaw(e);
+    };
 
     // ── validate ───────────────────────────────────────────────────────
     const text = input.message?.trim() ?? "";
@@ -177,6 +208,11 @@ export class AgentOrchestrator {
       notes: [],
       temporal: { references: [], unresolved: [], nowLocal: "", timezone: conversation.timezone },
       analysis: heuristicAnalysis(text, []),
+      intent: "chat",
+      mode: "chat",
+      verifiedClaims: [],
+      coverage: null,
+      claimCheck: null,
       memory: null,
       plan: null,
       claims: [],
@@ -217,7 +253,7 @@ export class AgentOrchestrator {
             },
             state.tracker,
           );
-          state.analysis = enforceRouting(a, text, state.temporal.references);
+          state.analysis = enforceRouting(a, text, state.temporal.references, { inConversation: recent.length > 0 });
           // Resolve any extra temporal phrases the model spotted.
           if (a.temporalExpressions.length) {
             const extra = resolveTemporal(text, { now, timezone: conversation.timezone, extraExpressions: a.temporalExpressions });
@@ -228,7 +264,9 @@ export class AgentOrchestrator {
           this.logger.warn({ executionId: state.id, err: describeErr(err) }, "analysis failed; using heuristic analysis");
           state.analysis = heuristicAnalysis(text, state.temporal.references);
         }
-        return `${state.analysis.intent}${state.analysis.needsWebSearch ? " · web search" : ""}${state.analysis.needsMemory ? " · memory" : ""}`;
+        state.intent = chooseIntent(state.analysis, text);
+        state.mode = pipelineFor(state.intent);
+        return `${state.intent.replace(/_/g, " ")}${state.analysis.needsMemory ? " · memory" : ""}${state.analysis.aspects.length ? ` · ${state.analysis.aspects.length} aspect(s)` : ""}`;
       });
       log({ analysis: state.analysis }, "analysis");
 
@@ -267,8 +305,10 @@ export class AgentOrchestrator {
       if (searchWanted && !this.deps.search) {
         state.notes.push("Web search isn't configured (TAVILY_API_KEY missing), so current facts couldn't be checked.");
       }
-      if (searchWanted && this.deps.search) {
+      if (searchWanted && this.deps.search && state.mode === "deep") {
         await this.runResearch(state, llm, recent, signal, emit);
+      } else if (searchWanted && this.deps.search && (state.mode === "lookup" || state.mode === "research")) {
+        await this.runWebResearch(state, llm, signal, emit);
       } else {
         for (const s of ["plan", "search", "evidence", "compare"] as const) emit({ type: "stage", stage: s, status: "skipped" });
       }
@@ -288,6 +328,11 @@ export class AgentOrchestrator {
         totalMs: Date.now() - started,
         provider: llm.describe().provider,
         models: [...state.tracker.models],
+        mode: state.mode,
+        intent: state.intent,
+        rounds: state.coverage?.rounds,
+        firstStatusMs: timing.firstStatus,
+        firstTokenMs: timing.firstToken,
       };
       const sourceRefs: SourceRef[] = usedSources.map(toSourceRef);
       const assistant = repos.messages.add({
@@ -303,7 +348,8 @@ export class AgentOrchestrator {
           planStatus: state.planStatus,
           memory: state.memory?.summary ?? { status: "not_requested", conversationIds: [], messageIds: [] },
           notes: state.notes,
-          followUps: followUpSuggestions({
+          ...(state.coverage && state.claimCheck ? { research: { intent: state.intent, claims: state.verifiedClaims, coverage: state.coverage, claimCheck: state.claimCheck } } : {}),
+          followUps: state.mode !== "deep" ? [] : followUpSuggestions({
             comparisons: state.comparisons,
             memoryFound: state.memory?.summary.status === "found",
             searched: state.sources.length > 0,
@@ -602,6 +648,171 @@ export class AgentOrchestrator {
     });
   }
 
+  /**
+   * Lookup and research pipelines: a bounded adaptive loop.
+   *
+   *   round 1: the analysis's queries (comparisons: at least one per option), concurrently
+   *   evidence (research only): one extraction call → claims with verbatim quotes, verified in code
+   *   coverage: entities × aspects → verified / mentioned / gap; sources that differ
+   *   round 2 (only if gaps remain): one targeted query per gap, never a repeat; then stop
+   *
+   * Stopping criteria: no gaps · two rounds done · search budget spent · search quota exhausted.
+   * Round-2 results aren't sent through a second extraction call (one extraction keeps a request
+   * inside Groq's per-minute token quota); their sentences are checked by the claim gate instead.
+   */
+  private async runWebResearch(state: ExecutionState, llm: LLMClient, signal: AbortSignal, emit: (e: AgentEvent) => void): Promise<void> {
+    const { config } = this.deps;
+    const a = state.analysis;
+    const question = a.standaloneQuestion || state.userMessage.content;
+    const research = state.mode === "research";
+    const entities = a.entities.slice(0, 5);
+    const aspects = a.aspects.slice(0, 6);
+    const timeSensitive = isTimeSensitive(`${state.userMessage.content} ${question}`);
+    const year = DateTime.fromJSDate(state.now).setZone(state.conversation.timezone).toFormat("yyyy");
+    const results: SearchResult[] = [];
+    const queriesRun: string[] = [];
+    let quotaHit = false;
+    emit({ type: "stage", stage: "plan", status: "skipped" });
+
+    const runRound = async (qs: string[], opts: { topic: "general" | "news"; recency?: "week" | "month"; label?: string; round?: 1 | 2; includeDomains?: string[] }) =>
+      Promise.all(
+        qs.map(async (query) => {
+          if (!state.tracker.canSearch() || quotaHit) return;
+          state.tracker.beginSearch();
+          queriesRun.push(query);
+          const label = opts.label ? `${query} · ${opts.label}` : query;
+          const round = opts.round ?? (opts.label ? 2 : 1);
+          emit({ type: "search", query: label, status: "start" });
+          const retrievedAt = nowIso();
+          try {
+            const out = await this.deps.search!.search(query, { maxResults: config.budgets.maxResultsPerSearch, topic: opts.topic, recency: opts.recency, depth: "advanced", includeDomains: opts.includeDomains, signal });
+            if (out.cached) state.tracker.cacheHits++;
+            results.push(...out.results.map((r) => ({ ...r, query })));
+            state.searchRecords.push({ query, provider: this.deps.search!.name, retrievedAt, status: out.cached ? "cached" : "ok", resultCount: out.results.length, metadata: { purpose: "general", topic: opts.topic, round, includeDomains: opts.includeDomains ?? [], urls: out.results.map((r) => r.url) } });
+            emit({ type: "search", query: label, status: out.cached ? "cached" : "done", resultCount: out.results.length });
+          } catch (err) {
+            if (isAbortError(err) && signal.aborted) throw err;
+            const e = toAppError(err);
+            if (e.code === "NOT_CONFIGURED") throw e;
+            state.searchRecords.push({ query, provider: this.deps.search!.name, retrievedAt, status: e.code === "SEARCH_TIMEOUT" ? "timeout" : "failed", resultCount: 0, metadata: { purpose: "general", error: e.message } });
+            emit({ type: "search", query: label, status: "failed", error: e.message });
+            if (e.code === "SEARCH_QUOTA") {
+              quotaHit = true;
+              if (!state.notes.includes(e.message)) state.notes.push(e.message);
+            }
+          }
+        }),
+      );
+
+    // Official sources first: domains the analysis named (vetted: plausible hostnames, never review
+    // sites) mark official pages in ranking and get one domain-restricted query in round 1.
+    // Live 2026-11-20: "latest Node.js LTS" and "what is new in React" cited only third-party blogs.
+    const officialDomains = [...new Set(a.officialDomains.map((d) => trustedDomainHint(d)).filter((d): d is string => Boolean(d)))].slice(0, 3);
+    const subjects: SubjectHint[] = entities.map((name) => ({ name, officialDomain: officialDomains.find((d) => isOfficialDomain(d, [{ name, officialDomain: null }])) ?? null }));
+    for (const d of officialDomains) if (!subjects.some((x) => x.officialDomain === d)) subjects.push({ name: d.split(".")[0]!, officialDomain: d });
+    const requestedVersions = requestedMajorVersions(`${state.userMessage.content} ${question}`);
+    // Ranking keeps earlier sources' ids stable: round-2 sources are appended after them.
+    const rankNew = (exclude: Set<string>, max: number): Source[] => {
+      const purposeByQuery = new Map<string, QueryPurpose>(queriesRun.map((q) => [q, "general"]));
+      const candidates = dedupeResults(results.filter((r) => !exclude.has(r.url)));
+      // Pages explicitly for another major version than the one asked about are dropped when other
+      // sources remain. Live 2026-11-20: "dark mode in Tailwind CSS v4" was answered from v3.tailwindcss.com.
+      const matching = candidates.filter((r) => !versionMismatch(r.url, requestedVersions));
+      const ranked = rankSources(matching.length >= Math.min(2, candidates.length) ? matching : candidates, { subjects, purposeByQuery, maxSources: max, now: state.now });
+      const { usable, quarantined } = screenSources(ranked);
+      if (quarantined.length) {
+        state.notes.push(`${quarantined.length} search result(s) were excluded because they contained instructions aimed at AI systems.`);
+        this.logger.warn({ executionId: state.id, urls: quarantined.map((q) => q.url) }, "quarantined sources");
+      }
+      return usable;
+    };
+    const maxSources = Math.min(research ? MAX_RESEARCH_SOURCES : MAX_LOOKUP_SOURCES, config.budgets.maxSources);
+
+    // ── round 1 ──
+    await this.stage(state, "search", emit, async () => {
+      const seen = new Set<string>();
+      const queries = a.searchQueries.map((q) => q.replace(/\s+/g, " ").trim()).filter((q) => q.length >= 2 && !seen.has(q.toLowerCase()) && seen.add(q.toLowerCase()));
+      // A comparison searches every option: add "<option> <criteria>" for options no query names.
+      if (state.intent === "comparison") {
+        for (const e of entities) {
+          if (!queries.some((q) => subjectMatches(e, q) || q.toLowerCase().includes(e.toLowerCase()))) queries.push(`${e} ${aspects.slice(0, 3).join(" ")}`.trim());
+        }
+      }
+      if (queries.length === 0) queries.push(truncate(question, 150));
+      const limit = Math.min(state.intent === "comparison" ? 4 : 3, config.budgets.maxSearches - 1);
+      const official = officialDomains.length ? [runRound([queries[0]!], { topic: "general", label: "official", round: 1, includeDomains: officialDomains.flatMap((d) => vendorDomains(d)) })] : [];
+      await Promise.all([runRound(queries.slice(0, official.length ? limit - 1 : limit), timeSensitive ? { topic: "news", recency: "month" } : { topic: "general" }), ...official]);
+      state.sources = rankNew(new Set(), maxSources).map((s, i) => ({ ...s, id: `S${i + 1}` }));
+      emit({ type: "sources", sources: state.sources.map(toSourceRef) });
+      return `${state.sources.length} source(s) from ${queriesRun.length} search(es)`;
+    });
+
+    // ── evidence (research only): claims with verbatim quotes, verified in code ──
+    if (research && state.sources.length > 0 && state.tracker.remainingLlmCalls() > 1) {
+      await this.stage(state, "evidence", emit, async () => {
+        try {
+          const extraction = await llm.generateStructured(
+            {
+              schema: ClaimExtractionSchema,
+              schemaName: "claim_extraction",
+              system: CLAIMS_SYSTEM,
+              prompt: claimsPrompt({ question, entities, aspects, sources: formatSourcesForExtraction(state.sources, CLAIMS_SOURCE_CHARS, [...entities, ...aspects, ...questionTerms(question)]) }),
+              promptVersion: PROMPT_VERSIONS.claims,
+              maxTokens: 2500,
+              role: "fast",
+              signal,
+            },
+            state.tracker,
+          );
+          const report = verifyClaims(extraction, state.sources, { entities, aspects });
+          state.verifiedClaims = report.claims;
+          if (report.rejected.length) this.logger.info({ executionId: state.id, rejected: report.rejected }, "rejected unsupported claims");
+          return `${report.claims.length}/${extraction.claims.length} claim(s) verified against sources`;
+        } catch (err) {
+          if (isAbortError(err)) throw err;
+          this.logger.warn({ executionId: state.id, err: describeErr(err) }, "claim extraction failed; answering from excerpts");
+          return "failed (answering from excerpts)";
+        }
+      });
+    } else {
+      emit({ type: "stage", stage: "evidence", status: "skipped" });
+    }
+    emit({ type: "stage", stage: "compare", status: "skipped" });
+
+    // ── coverage → targeted follow-up (bounded: at most one more round) ──
+    await this.stage(state, "coverage", emit, async () => {
+      // Lookups have no extraction: their cells are "mentioned" when a source addresses them.
+      let coverage = assessCoverage({ entities, aspects, claims: state.verifiedClaims, sources: state.sources, round: 1 });
+      const thin = state.sources.length < MIN_USABLE_SOURCES;
+      const gaps = coverage.cells.filter((c) => c.status === "gap");
+      if ((gaps.length > 0 || thin) && !quotaHit && state.tracker.canSearch()) {
+        const remaining = Math.min(3, config.budgets.maxSearches - state.tracker.searchCalls);
+        let followUps = gapQueries(coverage, { question, previous: queriesRun, max: remaining, year: timeSensitive ? year : undefined });
+        // Thin coverage with no targetable gap: broaden once with the question itself.
+        if (followUps.length === 0 && thin) followUps = gapQueries({ ...coverage, cells: [{ entity: null, aspect: null, status: "gap", claimIds: [], sourceIds: [] }] }, { question: truncate(question, 150), previous: queriesRun, max: 1 });
+        if (followUps.length) {
+          this.logger.info({ executionId: state.id, gaps: gaps.length, followUps }, "coverage gaps; targeted follow-up searches");
+          await runRound(followUps, { topic: "general", label: "follow-up" });
+          const existing = new Set(state.sources.map((s) => s.url));
+          const added = rankNew(existing, Math.max(0, maxSources + 3 - state.sources.length)).map((s, i) => ({ ...s, id: `S${state.sources.length + i + 1}` }));
+          state.sources = [...state.sources, ...added];
+          emit({ type: "sources", sources: state.sources.map(toSourceRef) });
+          coverage = assessCoverage({ entities, aspects, claims: state.verifiedClaims, sources: state.sources, round: 2, followUpQueries: followUps });
+        }
+      }
+      state.coverage = coverage;
+      // Tell the answer model when no source names an entity in full, so it doesn't attribute
+      // facts about a similarly named thing to it (or invent the entity's existence).
+      const unnamed = entities.filter((e) => state.sources.length > 0 && !state.sources.some((s) => namesEntity(sourceText(s), e)));
+      if (unnamed.length) state.notes.push(`None of the retrieved sources names ${unnamed.map((e) => `"${e}"`).join(", ")} exactly. Don't attribute facts about similarly named products to ${unnamed.length > 1 ? "them" : "it"}; say it couldn't be found.`);
+      const failed = state.searchRecords.filter((r) => r.status === "failed" || r.status === "timeout").length;
+      if (failed > 0 && !quotaHit) state.notes.push(`${failed} of ${state.searchRecords.length} web searches failed; results may be incomplete.`);
+      if (state.sources.length === 0) state.notes.push("The web searches returned no usable results.");
+      const sum = coverageSummary(coverage);
+      return `${sum.verified + sum.mentioned}/${sum.total} covered${sum.gaps ? ` · ${sum.gaps} gap(s)` : ""} · ${coverage.rounds} round(s)${coverage.conflicts.length ? ` · ${coverage.conflicts.length} difference(s)` : ""}`;
+    });
+  }
+
   private async synthesize(
     state: ExecutionState,
     llm: LLMClient,
@@ -612,37 +823,85 @@ export class AgentOrchestrator {
     const t0 = Date.now();
     state.signal.throwIfAborted();
     emit({ type: "stage", stage: "synthesize", status: "start" });
-    const context = buildSynthesisContext({
-      question: state.userMessage.content,
-      nowLocal: state.nowLocal,
-      timezone: state.conversation.timezone,
-      recent,
-      memory: state.memory,
-      memoryRequested: state.analysis.needsMemory,
-      comparisons: state.comparisons,
-      offering: state.offering,
-      planStatus: state.planStatus,
-      evidence: state.evidence,
-      sources: state.sources,
-      notes: state.notes,
-      searchAttempted: state.searchRecords.length > 0,
-      maxChars: this.deps.config.budgets.maxContextChars,
-    });
+    const deep = state.mode === "deep";
+    const searchWanted = state.analysis.needsWebSearch;
+    const mustMention = deep ? requiredFindings(state.comparisons) : [];
+    const context = deep
+      ? buildSynthesisContext({
+          question: state.userMessage.content,
+          nowLocal: state.nowLocal,
+          timezone: state.conversation.timezone,
+          recent,
+          memory: state.memory,
+          memoryRequested: state.analysis.needsMemory,
+          comparisons: state.comparisons,
+          offering: state.offering,
+          planStatus: state.planStatus,
+          evidence: state.evidence,
+          sources: state.sources,
+          notes: state.notes,
+          searchAttempted: state.searchRecords.length > 0,
+          maxChars: this.deps.config.budgets.maxContextChars,
+          mustMention,
+        })
+      : buildDirectContext({
+          question: state.userMessage.content,
+          nowLocal: state.nowLocal,
+          timezone: state.conversation.timezone,
+          recent,
+          sources: state.sources,
+          notes: state.notes,
+          searchStatus: !searchWanted ? "not_needed" : !this.deps.search ? "unavailable" : state.searchRecords.some((r) => r.status === "ok" || r.status === "cached") ? "ok" : "failed",
+          focusTerms: [...state.analysis.entities, ...questionTerms(state.analysis.standaloneQuestion || state.userMessage.content)],
+          maxChars: Math.min(DIRECT_CONTEXT_CHARS, this.deps.config.budgets.maxContextChars),
+          ...(state.mode === "research" && state.coverage ? { claims: state.verifiedClaims, coverage: state.coverage } : {}),
+        });
     const filter = new CitationFilter(new Set(state.sources.map((s) => s.id)));
     const urlGuard = new StreamUrlFilter(state.sources.map((s) => s.url));
+    // Search-grounded answers pass the claim gate line by line before anything is shown.
+    // Non-pricing historical audits use it too (pricing answers have the dedicated price verifier);
+    // figures from the remembered conversation are exempt, since restating it is legitimate.
+    const gated = state.mode === "lookup" || state.mode === "research" || state.intent === "historical_audit";
+    const gate =
+      gated && state.sources.length > 0
+        ? new ClaimGate(
+            state.sources,
+            [state.userMessage.content, ...recent.map((m) => m.content), state.nowLocal, ...(state.memory?.exchanges ?? []).flatMap((x) => [x.user?.content ?? "", x.assistant?.content ?? "", x.at])].join("\n"),
+            [state.userMessage.content, ...recent.filter((m) => m.role === "user").map((m) => m.content)].join("\n"),
+          )
+        : null;
+    const pass = (s: string) => (gate ? gate.push(s) : s);
+    // Chat and direct answers stream on the stronger model, which is idle on those paths (see strongStreamRole).
+    const preferred = deep ? "synthesis" : llm.strongStreamRole();
+    const request = (role: "synthesis" | "extract") => ({
+      system: deep ? SYNTHESIZE_SYSTEM : DIRECT_SYSTEM,
+      messages: [{ role: "user" as const, content: context }],
+      promptVersion: deep ? PROMPT_VERSIONS.synthesize : PROMPT_VERSIONS.direct,
+      maxTokens: deep ? 3072 : 2048,
+      signal,
+      role,
+    });
     let raw = "";
     try {
-      for await (const chunk of llm.streamText(
-        { system: SYNTHESIZE_SYSTEM, messages: [{ role: "user", content: context }], promptVersion: PROMPT_VERSIONS.synthesize, maxTokens: 3072, signal },
-        state.tracker,
-      )) {
-        const out = urlGuard.push(filter.push(chunk));
-        if (out) {
-          raw += out;
-          emit({ type: "token", text: out });
+      const streamWith = async (role: "synthesis" | "extract") => {
+        for await (const chunk of llm.streamText(request(role), state.tracker)) {
+          const out = pass(urlGuard.push(filter.push(chunk)));
+          if (out) {
+            raw += out;
+            emit({ type: "token", text: out });
+          }
         }
+      };
+      try {
+        await streamWith(preferred);
+      } catch (err) {
+        // Rate-limited before anything was shown: retry once on the regular answer model (own quota).
+        if (preferred === "synthesis" || raw || !(err instanceof AppError) || err.code !== "LLM_RATE_LIMIT") throw err;
+        this.logger.warn({ executionId: state.id, err: describeErr(err) }, "answer model rate-limited; retrying on the synthesis model");
+        await streamWith("synthesis");
       }
-      const tail = urlGuard.push(filter.flush()) + urlGuard.flush();
+      const urlTail = urlGuard.push(filter.flush()) + urlGuard.flush();
+      const tail = gate ? gate.push(urlTail) + gate.flush() : urlTail;
       if (tail) {
         raw += tail;
         emit({ type: "token", text: tail });
@@ -659,7 +918,31 @@ export class AgentOrchestrator {
     }
     state.stageMs.synthesize = Date.now() - t0;
     emit({ type: "stage", stage: "synthesize", status: "done" });
+    if (!deep) {
+      // Chat/lookup/research: citations and URLs are restricted to retrieved sources, and every
+      // figure in a search-grounded answer was checked against its cited source by the claim gate.
+      const text = final.text;
+      if (gate) {
+        state.claimCheck = gate.stats;
+        if (gate.stats.removed > 0) {
+          state.notes.push(`${gate.stats.removed} statement(s) were removed because no retrieved source supports their figures.`);
+          this.logger.warn({ executionId: state.id, removed: gate.stats.items.filter((i) => i.status === "unsupported") }, "claim gate removed statements");
+        }
+      } else if (state.mode === "lookup" || state.mode === "research") {
+        state.claimCheck = { checked: 0, supported: 0, repaired: 0, removed: 0, citedWithoutFigures: 0, items: [] };
+      }
+      if (!state.coverage && (state.mode === "lookup" || state.mode === "research")) {
+        state.coverage = { cells: [], conflicts: [], rounds: 0, followUpQueries: [] };
+      }
+      const citedIds = new Set([...text.matchAll(/\[(S\d+)\]/g)].map((m) => m[1]!));
+      const cited = state.sources.filter((s) => citedIds.has(s.id));
+      return { content: text, usedSources: [...cited, ...state.sources.filter((s) => !citedIds.has(s.id))] };
+    }
     // Code-level constraints: the prose may not contradict the computed rows (see answer-guard.ts).
+    if (gate && gate.stats.removed > 0) {
+      state.notes.push(`${gate.stats.removed} statement(s) were removed because no retrieved source supports their figures.`);
+      this.logger.warn({ executionId: state.id, removed: gate.stats.items.filter((i) => i.status === "unsupported") }, "claim gate removed statements");
+    }
     const guarded = enforceAnswerFacts(final.text, buildGuardRules({ comparisons: state.comparisons, planStatus: state.planStatus, question: state.userMessage.content }));
     if (guarded.applied.length) this.logger.info({ executionId: state.id, rules: guarded.applied }, "answer guard applied");
     // Prices the model states must exist somewhere it was given (evidence, rows, sources, memory).
@@ -676,7 +959,11 @@ export class AgentOrchestrator {
     const priced = dropUnsupportedPrices(guarded.text, support, state.userMessage.content);
     if (priced.removed.length) this.logger.warn({ executionId: state.id, removed: priced.removed }, "removed sentences with unsupported prices");
     // Attach citations the model omitted for verified values (deterministic; see attachMissingCitations).
-    const content = attachMissingCitations(priced.text, state.evidence);
+    const cited0 = attachMissingCitations(priced.text, state.evidence);
+    // Every computed change and possible update must be stated (see required-findings.ts).
+    const required = ensureRequiredFindings(cited0, mustMention);
+    if (required.added.length) this.logger.info({ executionId: state.id, added: required.added }, "required findings appended");
+    const content = required.text;
     const citedIds = new Set([...content.matchAll(/\[(S\d+)\]/g)].map((m) => m[1]!));
     // Sources list: cited ones first, then the others that informed comparisons.
     const cited = state.sources.filter((s) => citedIds.has(s.id));
@@ -808,4 +1095,22 @@ function describeErr(err: unknown): { name?: string; message?: string; code?: st
   if (err instanceof AppError) return { name: err.name, message: err.message, code: err.code };
   if (err instanceof Error) return { name: err.name, message: err.message };
   return { message: String(err) };
+}
+
+/** Major versions named with a "v" in the question ("Tailwind CSS v4" → [4]). */
+export function requestedMajorVersions(text: string): number[] {
+  return [...new Set([...text.matchAll(/\bv(\d{1,3})(?:\.\d+)*\b/gi)].map((m) => Number(m[1])))];
+}
+
+/** True when a URL is explicitly for a different major version: "v3.tailwindcss.com", "/docs/v3/", "/v2/". */
+export function versionMismatch(url: string, requested: number[]): boolean {
+  if (requested.length === 0) return false;
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  const found = [...`${u.hostname.split(".")[0]} ${u.pathname}`.matchAll(/(?:^|[/\s])v(\d{1,3})(?=[/.\s]|$)/gi)].map((m) => Number(m[1]));
+  return found.length > 0 && !found.some((v) => requested.includes(v));
 }

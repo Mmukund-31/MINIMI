@@ -7,6 +7,33 @@ Companion to [DESIGN.md](../DESIGN.md). This document maps the design onto the c
 `POST /api/chat {conversationId?, message, timezone}` → `text/event-stream`.
 Route: [apps/api/src/routes/chat.ts](../apps/api/src/routes/chat.ts). The route validates the body with Zod, rate-limits, hijacks the reply for SSE, and aborts the execution if the client disconnects.
 
+### Research intents and pipelines
+
+After `analyze`, [`chooseIntent`](../packages/core/src/agent/heuristics.ts) decides the intent from the model's proposal plus deterministic cues, and `pipelineFor` maps it to a pipeline:
+
+| Intent | Rule (code) | Pipeline | Stages | LLM calls |
+|---|---|---|---|---|
+| `chat` | no web search, no memory | chat | analyze → answer | 2 |
+| `fact_lookup` | default for web questions | lookup | search → coverage (+ ≤ 3 gap queries) → answer + claim gate | 2 |
+| `general_research` | model says so, or ≥ 2 requested aspects | research | search → claim extraction → coverage (+ gap queries) → answer + claim gate | 3 |
+| `comparison` | ≥ 2 options and a comparative cue; pricing may be one criterion among others | research | as above; round 1 searches every option | 3 |
+| `historical_audit` | memory needed, no pricing | deep | memory → plan → search → evidence → compare → answer + claim gate + guard | ≤ 8 |
+| `pricing_diff` | memory + pricing, or pricing of named products with no other aspect | deep | the full table below, + required findings | ≤ 8 |
+
+**Research loop** ([general-evidence.ts](../packages/core/src/research/general-evidence.ts)). The extraction call (`CLAIMS_SYSTEM`, fast model, ≤ 9K chars of sources) proposes atomic claims with verbatim quotes, tagged by entity and aspect. `verifyClaims` keeps a claim only if its quote occurs in the source (`quoteFound`), it isn't instruction-like, and it adds no figure absent from the source. It maps labels onto the requested entities and aspects and sets confidence in code (official 0.9, primary 0.8, secondary 0.6, +0.1 when another domain corroborates the same cell). `assessCoverage` builds the entities × aspects matrix: `verified` (a claim answers it), `mentioned` (a source names the entity and aspect), or `gap`. It also lists *sources that differ*: full dates or versions in one cell from different domains, with nothing in common. `gapQueries` produces one targeted query per gap, never repeating an earlier one. There are at most two rounds; round-2 sources are appended (ids stay stable) and checked by the claim gate rather than a second extraction call (Groq per-minute quota). `buildResearchEvidence` exposes the general evidence model (`ResearchEvidence`: authority, relevance, claims with supporting quotes and confidence).
+
+**Claim gate** ([claim-gate.ts](../packages/core/src/agent/claim-gate.ts)). It sits in the stream after the citation and URL filters, and releases text only in complete lines. Each sentence or table row with figures (numbers > 10, decimals, versions, date numbers; digits glued to letters are names) needs every figure in a source it cites, publication dates included. Large rounded figures (≥ 1,000, not years) match within 2%. A sentence is re-cited if one or two other sources hold the figures, and removed and recorded otherwise. Figures from the question, the conversation, the remembered exchange and today's date are exempt. Results go to `metadata.research.claimCheck`, and removals are noted in the answer.
+
+**Source selection** (lookup/research): one round-1 query restricted to the official domains the analysis names (`trustedDomainHint` drops review sites and implausible hosts; `vendorDomains` adds the brand .com), and those domains mark official pages in ranking. Pages for a different major version than one named with a "v" in the question (`versionMismatch`: `v3.` subdomains, `/v3/` paths) are dropped when other sources remain. Claims and coverage require the full entity name (`namesEntity`), and when no source names an entity, the answer model is told.
+
+**Gate streaming**: sentences are released as soon as each is complete and checked; table rows and fenced code are released as whole lines; code is never checked. Table rows are checked cell by cell. Totals derived from a count in the user's words (v × k, v × k × 12, base + v × k) are supported.
+
+**Required findings** ([required-findings.ts](../packages/core/src/agent/required-findings.ts), deep): changed rows and possible updates go to the model as `<must_mention>`; any the prose doesn't state (subject + a distinctive word of the finding) are appended under "Also found".
+
+**Answer models.** Chat, lookup and research answers stream on `LLMClient.strongStreamRole()`: the larger extract model when it shares the provider (idle on these paths, with its own Groq quota), retried once on the synthesis model if it is rate-limited before any output. `LLM_SYNTHESIS_PROVIDER` is respected. Stats record `intent`, `mode`, `rounds`, `firstStatusMs` and `firstTokenMs`.
+
+### Deep mode stages
+
 [`AgentOrchestrator.run`](../packages/core/src/agent/orchestrator.ts) executes these stages and emits an event for each:
 
 | Stage | Module | LLM? | Failure behavior |
@@ -55,6 +82,10 @@ All timestamps are stored in UTC; dates are interpreted in the conversation's IA
 - [openai-compatible.ts](../packages/core/src/llm/openai-compatible.ts): Groq/OpenAI; `json_schema` response format with a fallback to `json_object`; `reasoning_effort` for gpt-oss.
 - [anthropic.ts](../packages/core/src/llm/anthropic.ts): `output_config.format` JSON schema, `effort`, refusal stop-reason handling, server-side refusal fallback on supported models.
 - [testing/index.ts](../packages/core/src/testing/index.ts): scripted provider for tests and offline evals only.
+
+## History import
+
+`POST /api/conversations/import` ([memory/import.ts](../packages/core/src/memory/import.ts)) stores a past conversation with its original timestamps, so date-based recall can be tested on real history. Validation: strict Zod schema (1–100 messages, `user`/`assistant` roles only, ≤ 8,000 chars each, ISO timestamps with offset), chronological order, nothing in the future (5-minute skew), 1 MB body limit, 10 requests/minute. One transaction; FTS triggers index the messages; conversation and messages carry `metadata.imported`.
 
 ## Security notes
 

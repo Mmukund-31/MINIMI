@@ -1,0 +1,16 @@
+{
+  "title": "Node.js version for a new API",
+  "timezone": "Asia/Kolkata",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Which Node.js version should we use for a new backend API, and when does it reach end of life?",
+      "createdAt": "2026-11-10T10:15:00+05:30"
+    },
+    {
+      "role": "assistant",
+      "content": "Use Node.js 24, the current Active LTS line. It stays in Active LTS until October 2026 and then receives maintenance updates until April 2028. Avoid odd-numbered releases (such as Node 25) for production; they are never promoted to LTS.",
+      "createdAt": "2026-11-10T10:15:20+05:30"
+    }
+  ]
+}

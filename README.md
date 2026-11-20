@@ -1,6 +1,6 @@
 # Minimi Research Agent
 
-A chat agent with **one tool: web search**. It remembers past conversations, works out which one you mean ("last Tuesday", "on 3 November"), checks the vendors' own pages for what has changed since, and says plainly what it could not verify.
+A chat agent with **one tool: web search**. Ask it anything current and it searches, checks what the sources cover, searches again for what's missing, and answers with citations whose figures are checked against the cited pages. Ask about an earlier conversation ("last Tuesday", "on 3 November") and it finds that conversation, re-checks the vendors' own pages for what has changed since, and says plainly what it could not verify.
 
 Built for the minimi Software Engineering Internship challenge. Design rationale (one page): [DESIGN.md](DESIGN.md).
 
@@ -22,7 +22,32 @@ npm run dev               # UI http://localhost:5173 · API http://127.0.0.1:878
 | `TAVILY_API_KEY` | app.tavily.com | the web-search tool (free tier: 1,000 credits/month) |
 | `ANTHROPIC_API_KEY` | console.anthropic.com | optional: `LLM_PROVIDER=anthropic`, or Claude for the answer only via `LLM_SYNTHESIS_PROVIDER=anthropic` |
 
+For the best prose, add `ANTHROPIC_API_KEY` and set `LLM_SYNTHESIS_PROVIDER=anthropic`: Groq keeps the fast structured stages, and Claude writes the answers.
+
 The app starts without keys; the UI banner and `/api/health` say what's missing. On first start the database (`data/minimi.db`) is seeded with **labeled demo conversations** dated relative to today, so the three challenge prompts work immediately. They are one click away on the empty-chat screen. Seeded items carry a violet "seeded demo" badge. On a later day, run `npm run seed:reset` to re-date them.
+
+## Six intents, four pipelines, decided in code
+
+| Intent | Example | Pipeline | What runs |
+|---|---|---|---|
+| chat | "What can you help with?" | chat | one streamed answer |
+| fact_lookup | "Latest Node.js LTS?" | lookup | 1–3 concurrent searches → coverage check (+ targeted follow-up for gaps) → answer over excerpts → claim gate |
+| general_research | "Research Vercel's recent launches" | research | searches → claims extracted with verbatim quotes, verified in code → entities × aspects coverage → one targeted follow-up round for gaps → answer → claim gate |
+| comparison | "Cursor vs Copilot vs Windsurf: features, pricing model, privacy" | research | as above, every option searched, same criteria per option, gaps shown as "not found" |
+| historical_audit | "What did I ask you on 3 November? Still correct?" | deep | memory → plan → search → evidence → comparison → answer, guard and claim gate |
+| pricing_diff | "Has any pricing changed since last Tuesday?" | deep | the verified pricing pipeline: vendor-first search, plan-attributed quotes, deterministic comparison, timing, guard, required findings |
+
+The model proposes the intent; code decides (`chooseIntent` in [heuristics.ts](packages/core/src/agent/heuristics.ts)). A reference to an earlier conversation never skips memory, and a price check never skips the pricing verifier. Every answer grounded in search passes a **claim gate**: a line is shown only after every figure, date and version in it is found in a source it cites. Otherwise it is re-cited to the source that has it, or removed. Under each answer the UI shows, rendered from code rather than prose, what the sources covered, what they didn't, where they disagree, and how many statements were checked.
+
+## Test memory with your own history
+
+The seeded demo conversations make the challenge prompts work on first start. To test recall on your own history, import a conversation with its original timestamps: use **Import past conversation** in the sidebar, or call the API:
+
+```bash
+curl -X POST localhost:8787/api/conversations/import -H 'content-type: application/json' -d @docs/import-example.json
+```
+
+The format is in [docs/import-example.json](docs/import-example.json): `title?`, `timezone?`, and `messages[]` with `role`, `content` and an ISO `createdAt`, in chronological order and not in the future. Imported conversations are indexed and recalled exactly like live ones ("What did I ask you last Tuesday?"), and are labelled "imported" in the sidebar.
 
 ## The three challenge scenarios
 
@@ -55,14 +80,14 @@ flowchart LR
   O --> R[Research engine<br/>evidence validator · price parser<br/>change detector · citation filters]
 ```
 
-`validate → resolve dates → analyze → recall memory → plan → search → extract evidence → verify → compare → stream answer → filter/repair citations → persist`. Each stage reports progress over SSE (the UI shows it live) and runs within a budget. The pipeline handles missing credentials, invalid structured output and provider failures (including exhausted model or search quotas) with explicit errors or qualified partial answers, rather than silently presenting unverified facts.
+`validate → resolve dates → analyze → route (chat · direct · deep)`. Direct: `search → rank → screen → stream answer over excerpts → filter citations/URLs/unsupported prices`. Deep: `recall memory → plan → search → extract evidence → verify → compare → stream answer → enforce facts + citations`. Then `persist`. Each stage reports progress over SSE (the UI shows it live) and runs within a budget. The pipeline handles missing credentials, invalid structured output and provider failures (including exhausted model or search quotas) with explicit errors or qualified partial answers, rather than silently presenting unverified facts.
 
 ```
 apps/api        Fastify routes: health, conversations, chat (SSE)
 apps/web        React + Vite + Tailwind UI
 packages/core   all agent logic (framework-free, unit-tested)
   agent/        orchestrator, versioned prompts, context assembly, citation filters
-  temporal/     date resolver   memory/  hybrid retrieval   llm/  provider adapters
+  temporal/     date resolver   memory/  hybrid retrieval, history import   llm/  provider adapters
   search/       Tavily, normalisation, ranking, cache   research/  evidence, prices, comparison
   db/           node:sqlite, migrations, repositories   testing/  deterministic test doubles
 evals/          offline scenarios, live runner, grading, ground truth, reports
@@ -70,21 +95,24 @@ evals/          offline scenarios, live runner, grading, ground truth, reports
 
 ## Key technical decisions
 
-- **One orchestrated pipeline, not an agent loop.** Bounded cost (≤ 8 LLM calls, ≤ 10 searches per message) and deterministic tests.
+- **Typed intents, decided in code.** Six intents map to four pipelines, so a fact lookup doesn't pay for a pricing audit, and a pricing audit can't be skipped.
+- **Bounded adaptive research, not an open agent loop.** Search, assess coverage (entities × aspects), run one targeted follow-up per gap, stop. At most two rounds, never a repeated query, ≤ 8 LLM calls and ≤ 10 searches per message, deterministic tests.
+- **One general evidence model.** Claims carry verbatim supporting quotes, source authority (official / primary / secondary) and confidence, all verified or computed in code. The pricing pipeline keeps its stricter, specialised model.
+- **Validate structure, not just prose.** The claim gate checks every figure against its citation before display. Required findings make sure no computed change or possible update is omitted. Coverage and disagreements are rendered from metadata. No new pricing-specific text rules were added.
 - **The model reads; code decides.** Extracted facts need a verbatim quote found in the source, a source that names the vendor, and a price tied to the named plan. Verdicts are computed by a tested price parser and comparator, never by the model.
 - **Official sources first.** Pricing searches target the vendor's domain (Tavily `include_domains`). If those pages show no visible prices, or budget remains, an open search runs too. Third-party verdicts are labeled as such.
 - **Honest uncertainty.** No evidence, conflicting sources, stale pages, pages published before the conversation, or prices not tied to the plan all yield "uncertain". "Not comparable" never means "unchanged".
 - **No native dependencies.** Built-in `node:sqlite` (FTS5) instead of better-sqlite3: unsigned native binaries were blocked on the development machine.
-- **Free-tier aware.** Groq quotas are per model, so roles are split across two models, with escalation (planning) and fallback (extraction on rate limit). The Anthropic adapter is validated against the real API (structured output and streaming).
+- **Free-tier aware.** Groq quotas are per model, so roles are split across two models, with escalation (planning) and fallback (extraction on rate limit). Chat, lookup and research answers stream on the larger model (idle on those paths, with its own quota) and fall back to the smaller one if it is rate-limited. The Anthropic adapter is validated against the real API (structured output and streaming).
 - **Three separate questions.** Was the earlier claim right when made (`historicalAccuracy`), has it changed since (status + dimension), and is the earlier answer incomplete (plans on vendor pages it never mentioned, shown as "also offered now", never called new without a dated source).
 
 ## Testing and evaluation
 
 | Command | What it checks | Last result |
 |---|---|---|
-| `npm test` | 226 unit + integration tests (Fastify inject, deterministic doubles, no network) | 226/226 |
-| `npm run eval` | 54 deterministic scenarios: dates, memory, research, pricing, completeness, updates, multi-turn, uncertainty, adversarial, the 3 demos. Report: [evals/REPORT.md](evals/REPORT.md) | 54/54 |
-| `npm run eval:live` | the 3 demos + 2 controls against real Groq + Tavily. Structural + product-update checks, completeness grading, and verdict grading against [human-reviewable ground truth](evals/ground-truth.json). Report: [evals/LIVE_REPORT.md](evals/LIVE_REPORT.md) | **Final commit:** full five-case run passed 5/5 automatic checks, 9 correct / 0 abstained / 0 wrong against human-confirmed ground truth; the Cursor control was complete. Separately, nine earlier complete runs during iterative development (06:30–07:06), each on the code as it stood while fixes were being made, not nine runs of an identical final build: 77 correct, 4 abstained, 0 wrong in aggregate, graded at the time against then-provisional ground truth. Only the final-commit run reflects the final build. [Details](docs/evaluation.md#live-validation-2026-11-20) |
+| `npm test` | 282 unit + integration tests (Fastify inject, deterministic doubles, no network): routing, research loop, claim gate, coverage, required findings, import, pricing pipeline | 282/282 |
+| `npm run eval` | 64 deterministic scenarios: dates, memory, research, pricing, completeness, updates, multi-turn, uncertainty, adversarial, general research (lookup, comparison, gap follow-up, sources that differ, claim gate, required findings), the 3 demos. Report: [evals/REPORT.md](evals/REPORT.md) | 64/64 |
+| `npm run eval:live` | 28 cases against real Groq + Tavily: the 3 challenge prompts, 2 controls, memory on imported history, and 22 general-research cases (current facts, technical research, company launches, comparisons, current developments, conflicting sources, source quality, 5-dimension completeness, follow-up context, injected instructions, abstention). Automatic checks, general-research metrics (coverage, gap disclosure, citation precision, source authority, routing, abstention, latency by pipeline) and ground-truth grading for the challenge prompts. Factual correctness of general answers is left to human review. Report: [evals/LIVE_REPORT.md](evals/LIVE_REPORT.md) | **Full run (12:50 UTC): 21/28**; challenge prompts 8 correct / 1 abstained / **0 wrong** against human-confirmed ground truth. The 7 failures were diagnosed: 5 agent fixes and 2 checker corrections (disclosed); all 7 passed on targeted re-runs. [Details](evals/LIVE_REPORT.md#after-the-full-run-diagnosis-fixes-and-targeted-re-runs-2026-11-20-same-day) |
 | `npm run eval:perf` | searches, LLM calls, tokens and per-stage latency computed from saved live runs (no API calls) | see [docs/evaluation.md](docs/evaluation.md) |
 | `npm run lint` · `npm run typecheck` · `npm run build` | ESLint, strict tsc, production build | clean |
 
@@ -97,6 +125,7 @@ Offline scenarios test the deterministic machinery against known model outputs. 
 - Vendor pages that render prices with JavaScript, and sites that block fetchers, give "uncertain" rows.
 - Groq's free tier has per-model quotas (8K tokens/min and a daily token cap). Heavy use falls back to the smaller model, with a note in the answer; about nine full live-eval runs in a day exhausted it on 2026-11-20.
 - Live results vary between runs because search results and model outputs vary.
+- The claim gate checks figures, dates and versions against cited sources, not meaning: a sentence without figures passes on its (valid) citation alone.
 - The comparison table is computed in code and the answer guard enforces specific facts. Beyond those, the prose is the model's and can still drop a qualifier.
 - Vendor pricing pages are rarely dated. When no self-dated vendor page is found, a difference is reported as "timing unknown", not as a change since the conversation.
 - The free search tier (Tavily, 1,000 credits/month) limits live runs; once it's exhausted, searches fail with HTTP 432 and answers say nothing could be checked.

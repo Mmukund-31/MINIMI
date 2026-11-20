@@ -5,6 +5,7 @@ import type { LiveTurn } from "../hooks/useChat";
 import { ComparisonTable } from "./ComparisonTable";
 import { Markdown } from "./Markdown";
 import { ResearchProgress } from "./ResearchProgress";
+import { ResearchSummary } from "./ResearchSummary";
 import { SourceList } from "./SourceList";
 
 export function UserBubble({ text, seeded, at }: { text: string; seeded?: boolean; at?: string }) {
@@ -61,6 +62,8 @@ function Details({ message }: { message: Message }) {
               <span>{stats.llmCalls} model calls</span>
               <span>{(stats.usage.inputTokens + stats.usage.outputTokens).toLocaleString()} tokens</span>
               <span>{(stats.totalMs / 1000).toFixed(1)}s</span>
+              {stats.firstTokenMs !== undefined && <span>first words {(stats.firstTokenMs / 1000).toFixed(1)}s</span>}
+              {stats.intent && <span>{stats.intent.replace(/_/g, " ")} · {stats.mode}</span>}
               <span>{stats.models.join(", ")}</span>
             </div>
           )}
@@ -83,6 +86,7 @@ export function AssistantMessage({ message, onFollowUp, isLast }: { message: Mes
       )}
       <Markdown text={message.content} sources={sources} />
       {m.comparisons && m.comparisons.length > 0 && <ComparisonTable comparisons={m.comparisons} sources={sources} />}
+      {m.research && <ResearchSummary research={m.research} sources={sources} />}
       {m.offering && m.offering.length > 0 && (
         <div className="rounded-xl border border-zinc-200 px-3 py-2.5 text-[13px] dark:border-zinc-800">
           <div className="mb-1.5 text-xs font-medium tracking-wide text-zinc-500 uppercase dark:text-zinc-400">Also offered now (not in the earlier answer)</div>

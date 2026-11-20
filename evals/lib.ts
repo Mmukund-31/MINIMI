@@ -29,7 +29,8 @@ export type Category =
   | "product_update"
   | "multi_turn"
   | "uncertainty"
-  | "adversarial";
+  | "adversarial"
+  | "general";
 
 export interface Metrics {
   retrieval?: { tp: number; fp: number; fn: number };
@@ -288,7 +289,7 @@ export function agentScenario(id: string, category: Category, description: strin
       for (const s of expect.answerIncludes ?? []) if (!result!.content.includes(s)) failures.push(`answer lacks "${s}"`);
       for (const s of expect.answerExcludes ?? []) if (result!.content.includes(s) || text.includes(s)) failures.push(`answer contains forbidden "${s}"`);
       for (const re of expect.noteMatches ?? []) if (!re.test((meta.notes ?? []).join(" "))) failures.push(`notes lack ${re}`);
-      const srcEvents = eventsOf(events, "sources")[0]?.sources ?? [];
+      const srcEvents = eventsOf(events, "sources").at(-1)?.sources ?? [];
       for (const s of expect.sourcesExclude ?? []) if (srcEvents.some((x) => x.url.includes(s))) failures.push(`source ${s} should have been excluded`);
       if (expect.firstSourceDomain && srcEvents[0]?.domain !== expect.firstSourceDomain) failures.push(`first source ${srcEvents[0]?.domain} ≠ ${expect.firstSourceDomain}`);
 

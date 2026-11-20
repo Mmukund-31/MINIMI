@@ -113,7 +113,8 @@ export interface StructuralViolation {
   detail: string;
 }
 
-const LAUNCH_VERB = /\b(launched|launches|released|releases|introduced|introduces|announced|announces|shipped|ships|rolled out|unveiled|debuted)\b/i;
+// Verb forms only: the nouns "releases"/"launches" ("odd-numbered releases are never LTS") are not launch claims.
+const LAUNCH_VERB = /\b(launched|released|introduced|introduces|announced|announces|shipped|rolled out|unveiled|debuted)\b/i;
 
 /**
  * Product-update checks. Every "changed" feature row must cite a source that names the
@@ -138,7 +139,8 @@ export function updateChecks(input: { comparisons: Comparison[]; sources: Source
       out.push({ check: "update-attribution", detail: `${c.subject}: cited update source doesn't name the product` });
     }
   }
-  // Unsupported launch claims in the answer text.
+  // Unsupported launch claims in the answer text (only when product updates were assessed at all).
+  if (features.length === 0) return out;
   const confirmed = new Set(features.filter((c) => c.status === "changed").map((c) => c.subject));
   const subjects = [...new Set(input.comparisons.map((c) => c.subject))];
   // Per clause: "HubSpot … remained on the same tiers; only Salesforce announced X" claims a launch for Salesforce only.

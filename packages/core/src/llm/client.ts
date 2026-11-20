@@ -35,6 +35,8 @@ export interface StreamRequest {
   maxTokens?: number;
   effort?: Effort;
   signal?: AbortSignal;
+  /** Defaults to "synthesis". Direct answers may stream on the extract model (see strongStreamRole). */
+  role?: "synthesis" | "extract";
 }
 
 /**
@@ -50,6 +52,18 @@ export class LLMClient {
   /** True when two roles use different models (and so, on Groq, different rate-limit quotas). */
   hasDistinctModel(a: LLMRole, b: LLMRole): boolean {
     return this.roles[a].model !== this.roles[b].model || this.roles[a].provider !== this.roles[b].provider;
+  }
+
+  /**
+   * Role to stream a direct answer with. Direct mode makes no extraction call, so on a single
+   * provider the (larger) extract model is idle and has its own rate-limit bucket: use it for
+   * better prose. If the user routed synthesis to a different provider on purpose
+   * (LLM_SYNTHESIS_PROVIDER), respect that choice.
+   */
+  strongStreamRole(): "synthesis" | "extract" {
+    const r = this.roles;
+    if (r.synthesis.provider !== r.fast.provider) return "synthesis";
+    return r.extract.model !== r.synthesis.model ? "extract" : "synthesis";
   }
 
   describe(): { provider: string; models: string[] } {
@@ -94,7 +108,7 @@ export class LLMClient {
   }
 
   async *streamText(req: StreamRequest, tracker: UsageTracker): AsyncIterable<string> {
-    const { provider, model } = this.roles.synthesis;
+    const { provider, model } = this.roles[req.role ?? "synthesis"];
     tracker.beginLlmCall(model, req.promptVersion);
     for await (const chunk of provider.streamText({
       system: req.system,

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, CalendarClock, Database, Globe } from "lucide-react";
+import { AlertTriangle, CalendarClock, Database, Globe, Search } from "lucide-react";
 import { api, type ConversationListItem, type Health } from "./lib/api";
 import { useChat } from "./hooks/useChat";
 import { Sidebar } from "./components/Sidebar";
@@ -15,7 +15,12 @@ const DEMO_PROMPTS = [
   { icon: Database, text: "Last Tuesday I asked you about Postgres hosting. Has any pricing changed since then?" },
 ];
 
-const idFromHash = (): string | null => /^#\/c\/(conv_[a-z0-9]+)$/i.exec(window.location.hash)?.[1] ?? null;
+const GENERAL_PROMPTS = [
+  "What were the biggest AI model releases this month?",
+  "Bun vs Deno for a new HTTP API today: which should I pick and why?",
+];
+
+const idFromHash =(): string | null => /^#\/c\/(conv_[a-z0-9]+)$/i.exec(window.location.hash)?.[1] ?? null;
 
 export default function App() {
   const [conversations, setConversations] = useState<ConversationListItem[]>([]);
@@ -68,6 +73,16 @@ export default function App() {
             refreshList();
           });
         }}
+        onImport={(data) => {
+          if (chat.busy) return;
+          api
+            .importConversation(data)
+            .then((r) => {
+              refreshList();
+              setActiveId(r.conversation.id);
+            })
+            .catch((err: Error) => alert(err.message));
+        }}
         health={health}
       />
       <main className="flex min-w-0 flex-1 flex-col">
@@ -110,6 +125,17 @@ export default function App() {
                       {text}
                     </button>
                   ))}
+                  <div className="mt-4 text-xs font-medium tracking-wide text-zinc-500 uppercase">Or ask anything current</div>
+                  {GENERAL_PROMPTS.map((text) => (
+                    <button
+                      key={text}
+                      onClick={() => void chat.send(text)}
+                      className="flex items-start gap-3 rounded-xl border border-zinc-200 px-4 py-3 text-left text-[14px] text-zinc-700 transition hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:border-zinc-700 dark:hover:bg-zinc-900"
+                    >
+                      <Search className="mt-0.5 h-4 w-4 shrink-0 text-zinc-400" />
+                      {text}
+                    </button>
+                  ))}
                 </div>
               </div>
             )}
@@ -119,7 +145,7 @@ export default function App() {
             <div className="space-y-8">
               {chat.messages.map((m, i) =>
                 m.role === "user" ? (
-                  <UserBubble key={m.id} text={m.content} seeded={m.metadata.seeded} at={m.metadata.seeded ? m.createdAt : undefined} />
+                  <UserBubble key={m.id} text={m.content} seeded={m.metadata.seeded} at={m.metadata.seeded || m.metadata.imported ? m.createdAt : undefined} />
                 ) : (
                   <AssistantMessage key={m.id} message={m} isLast={i === chat.messages.length - 1 && !chat.live} onFollowUp={(q) => void chat.send(q)} />
                 ),

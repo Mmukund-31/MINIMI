@@ -49,11 +49,11 @@ Date phrases are resolved in code, in the user's timezone; ambiguous phrases yie
 - Coverage depends on the model labelling claims; unlabelled facts show as "mentioned", not "verified".
 - Accuracy is bounded by search coverage; bot-blocked or JS-rendered pages stay unverified.
 - The gate checks figures against the *cited* source, not whether that source is right (a third-party page's wrong price passes).
-- Live (28 cases): challenge prompts 8 correct / 1 abstained / 0 wrong against human-confirmed ground truth; automatic checks 21/28 in the full run, with all 7 failures fixed or corrected and passing on re-run. General answers await human review. Search dominates latency (p50: lookup 6 s, research 10 s, deep 16 s).
+- Live (28 cases): challenge prompts 8 correct / 1 abstained / 0 wrong against human-confirmed ground truth; automatic checks 21/28 in the full run, with all 7 failures fixed or corrected and passing on re-run. General answers were reviewed by the author against their sources; the review found two errors, both traced to third-party sources. Search dominates latency (p50: lookup 6 s, research 10 s, deep 16 s).
 
 ## With another week
 
-1. Human grading of the general live set, and a semantic faithfulness check (entailment) behind the figure gate.
+1. A fixed, graded answer key for the general live set, and a semantic faithfulness check (entailment) behind the figure gate.
 2. Speculative search on the raw message while the analysis runs (about 1 s to first words).
 3. Headless rendering of official pages for the deep path, with a per-domain cache.
 4. Learn date disambiguation from user corrections; add accounts and Postgres for multiple users.

@@ -2,8 +2,6 @@
 
 | Suite | Command | Network | Purpose |
 |---|---|---|---|
-| Suite | Command | Network | Purpose |
-|---|---|---|---|
 | Tests | `npm test` | none | 282 unit + integration tests in 20 files (Fastify inject, deterministic test doubles) |
 | Offline eval | `npm run eval` | none | 64 scenarios that pin down the deterministic machinery under known, including adversarial, model outputs → [evals/REPORT.md](../evals/REPORT.md) |
 | Live eval | `npm run eval:live` | Groq + Tavily | 28 cases end to end: the 3 challenge prompts, 2 controls, memory on imported history, 22 general-research cases → [evals/LIVE_REPORT.md](../evals/LIVE_REPORT.md) |
@@ -32,7 +30,7 @@ The scenarios were written alongside the code to pin down the behaviors in the b
 
 Offline testing (`npm test`, `npm run eval`) uses deterministic doubles and no network: it proves the machinery behaves as specified on known inputs. Live validation (`npm run eval:live`) uses real Groq + Tavily and is the only measure of end-to-end answer quality.
 
-Three kinds of live evidence are kept separate: automatic checks (code judges behaviour), human-confirmed ground truth (challenge prompts only), and general-research answers, whose factual correctness is **pending human review**.
+Three kinds of live evidence are kept separate: automatic checks (code judges behaviour), human-confirmed ground truth (challenge prompts only), and general-research answers, reviewed by the project author against the cited sources (2026-11-21).
 
 **1. Automatic checks (pass/fail, no ground truth needed):**
 - **Completed:** the answer finished without error.
@@ -66,7 +64,7 @@ Full run at 12:50 UTC, default configuration (Groq `gpt-oss-20b` + `gpt-oss-120b
 | Human-confirmed ground truth (challenge prompts) | 8 correct / 1 abstained / **0 wrong** / 0 missing; 4 entries ungraded (prices not retrievable) |
 | After the full run | the 7 failures were diagnosed: 5 agent defects fixed and 2 checker expectations corrected (both disclosed). The 7 cases were then re-run in targeted runs (`--only`) and all 7 passed |
 | General research (19 lookup/research cases, full run) | relevance 17/17 · routing 6/6 · coverage 70/72 cells · citation precision 48/56 · source authority 16% official/primary |
-| General research, factual correctness | **pending human review** |
+| General research, factual correctness | **Reviewed by the project author against the cited sources (2026-11-21)**; two errors found, listed under limitations |
 
 Details of each failure, its fix and the re-runs: [LIVE_REPORT.md](../evals/LIVE_REPORT.md#after-the-full-run-diagnosis-fixes-and-targeted-re-runs-2026-11-20-same-day).
 
@@ -74,7 +72,7 @@ Details of each failure, its fix and the re-runs: [LIVE_REPORT.md](../evals/LIVE
 
 - **One full run.** The 21/28 result is from code that predates the 5 agent fixes. After the fixes only the 7 failing cases were re-run (plus 2 latency checks); the 21 passing cases were not re-run live, and their behaviour after the fixes rests on the deterministic suites.
 - **Two checker corrections.** One abstention case was relaxed to accept "hasn't happened yet" without searching; the abstention regex was widened to accept "not provided in the available sources". Both changes were made after seeing results, and both are disclosed.
-- **Ground truth covers only the challenge prompts:** 9 human-confirmed verdict entries and 2 completeness entries; 4 vendor plans stay ungraded. General-research answers have automatic checks and metrics only. Two errors were found only by reading answers: a third-party "$4/user" Copilot Business price, and a v3 configuration hint in a Tailwind v4 answer.
+- **Ground truth covers only the challenge prompts:** 9 human-confirmed verdict entries and 2 completeness entries; 4 vendor plans stay ungraded. General-research answers were reviewed by the project author against their sources (2026-11-21) rather than graded against a fixed answer key, so no accuracy percentage is claimed for them. That review, not the automatic checks, found two errors: a third-party "$4/user" Copilot Business price, and a v3 configuration hint in a Tailwind v4 answer.
 - **28 cases is a broad smoke test, not a statistical estimate.** Live results vary between runs because search results and model outputs vary.
 - **Lexical checks.** The claim gate verifies figures against the cited source, not the meaning of figure-free sentences, and not whether the cited source itself is correct.
 - **Free-tier quotas** limit live runs: Groq per-model tokens per minute and per day, and Tavily's 1,000 credits per month.
@@ -380,11 +378,11 @@ Historical record. Everything below was verified against commit **83a5d11**, the
 
 1. *Ground truth (human-confirmed, challenge prompts):* 8 correct / 1 abstained / **0 wrong**.
 2. *Automatic checks:* full run 21/28. Every failure was diagnosed, fixed (5 agent issues) or corrected in the checker (2, disclosed), and re-run: 7/7 then pass. The full suite was not re-run after the fixes, to save quota. Details and every answer: [LIVE_REPORT.md](../evals/LIVE_REPORT.md).
-3. *General-research metrics (full run, 19 lookup/research cases):* relevance 17/17 · routing 6/6 · coverage 70/72 cells (31 quote-verified) · citation precision 48/56 statements with figures matched their cited source (14 re-cited, 8 removed before display) · source authority **16% official/primary** (low; it motivated official-sources-first, which is not yet re-measured on a full run) · adaptive second round in 5/19 · factual correctness **pending human review**.
+3. *General-research metrics (full run, 19 lookup/research cases):* relevance 17/17 · routing 6/6 · coverage 70/72 cells (31 quote-verified) · citation precision 48/56 statements with figures matched their cited source (14 re-cited, 8 removed before display) · source authority **16% official/primary** (low; it motivated official-sources-first, which is not yet re-measured on a full run) · adaptive second round in 5/19 · factual correctness: reviewed by the project author on 2026-11-21 (see [Current live results](#current-live-results-2026-11-20)).
 
 **Latency by pipeline (full run, p50 / p90 total):** chat 1.9 / 2.0 s · lookup 6.2 / 10.2 s · research 10.4 / 15.4 s · deep 15.7 / 18.2 s. Search dominates (Tavily advanced: 2.5–7.7 s per round); the answer stage is 0.9–2.8 s. First status arrives within milliseconds. First answer words come after each sentence is checked, which is now sentence by sentence (previously line by line).
 
-**Problems found by reading answers** (no automatic check caught them): a third-party "$4/user" Copilot Business price in a comparison (the gate verifies figures against the *cited* source, not the source's correctness); a leftover v3 config hint in the Tailwind v4 answer. Both are listed for human review.
+**Problems found by reading answers** (no automatic check caught them): a third-party "$4/user" Copilot Business price in a comparison (the gate verifies figures against the *cited* source, not the source's correctness); a leftover v3 config hint in the Tailwind v4 answer. Both were confirmed in the author's review (2026-11-21).
 
 ## Verification of the latest snapshot (d3456e8)
 

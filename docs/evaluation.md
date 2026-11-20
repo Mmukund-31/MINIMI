@@ -270,7 +270,7 @@ With a new Tavily key, `npm run eval:live` ran against real Groq + Tavily. Every
 | 07:11 | 0/5 | – | Groq daily quota exhausted |
 | **07:57** | **5/5** | **9 / 0 / 0 / 0** | **Final commit (83a5d11 code), full five-case run.** Every answer read against its rows and sources: CRM 3/3 (Salesforce Copilotforce from salesforce.com dated 17 Nov; the third-party Zoho *Desk* post now only a "possible update"); 3 November 3/3 plus Pro+ and Max; Postgres 3/3 with Neon "already out of date" (blog dated 2025-08-14); Cursor complete. **Shown in full in [evals/LIVE_REPORT.md](../evals/LIVE_REPORT.md)** |
 
-Totals over the nine complete runs (06:30–07:06): **77 correct, 4 abstained, 0 wrong, 0 missing** (provisional ground truth). No run gave a confident verdict the ground truth contradicts. The four abstentions: Neon once (06:30, before the timing fix), Copilot Pro twice, Freshsales once.
+Totals over the nine complete iterative runs (06:30–07:06; code changed between runs, so this is not nine runs of one build): **77 correct, 4 abstained, 0 wrong, 0 missing** (provisional ground truth). No run gave a confident verdict the ground truth contradicts. The four abstentions: Neon once (06:30, before the timing fix), Copilot Pro twice, Freshsales once.
 
 ### Hand-graded Cursor control (Pro is a $20 legacy plan, not sold to new customers; closest tier Premium $30)
 
@@ -307,9 +307,11 @@ Render, AWS RDS, Pipedrive and Zoho stay **ungraded** (prices not retrievable: J
 
 ## Final verification
 
-- **Final code:** commit `83a5d1139c69fac6581d82ded42668552e0a7756` ("Final evaluation and docs updated"). The commit after it changes documentation, the evaluation report, ground-truth review labels, the 3 November screenshot, and the report re-render tool (`evals/live-runner.ts --from` now also recomputes completeness grades); no agent code changed.
+Everything below was verified against commit **83a5d11**, the final code, and its successful CI run (GitHub Actions run 44693956464).
+
+- **Final code:** commit `83a5d1139c69fac6581d82ded42668552e0a7756` ("Final evaluation and docs updated"). The two commits after it (`8d733ff`, `dafb745`) change only documentation, the evaluation report, ground-truth review labels and dates, the 3 November screenshot, and the report renderer (`evals/live-runner.ts`: `--from` also recomputes completeness grades, and the report wording states the review date and grading status). No agent code changed.
 - **CI:** GitHub Actions run 44693956464 on 83a5d11: **success**, all three jobs (Ubuntu Node 22, Ubuntu Node 24, Windows Node 24), each with clean install, typecheck, lint, tests, offline evaluation, the report-up-to-date check and build.
 - **Fresh clone of 83a5d11** (`git clone` from GitHub, no `.env`, 2026-11-20): `npm install` ok · `npm run typecheck` 0 errors · `npm run lint` clean · `npm test` **226/226** (15 files) · `npm run eval` **54/54** (report content identical; only line endings differ under `core.autocrlf`) · `npm run build` ok · `npm run dev`: UI served, demo data seeded, `/api/health` names the missing keys, and chat returns a clear `NOT_CONFIGURED` error.
 - **Live, final commit:** full five-case run (2026-11-20 07:57 UTC, real Groq + Tavily, default configuration) on the final code: **5/5 automatic checks, 9 correct / 0 abstained / 0 wrong** against human-confirmed ground truth. Hand-graded: Cursor control complete. Every answer was read against its rows and sources; the remaining prose residue is listed above. Shown in full in [evals/LIVE_REPORT.md](../evals/LIVE_REPORT.md). (An earlier attempt the same morning ran out of daily model quota; the run history records it.)
-- **Live, development sequence:** across nine complete runs while fixes were being made (06:30–07:06): 77 correct / 4 abstained / 0 wrong (graded at the time against provisional ground truth; no expectation changed when it was confirmed).
-- **Totals across all ten complete runs:** 86 correct / 4 abstained / 0 wrong / 0 missing. No run gave a confident verdict the ground truth contradicts.
+- **Live, development sequence:** nine complete iterative runs (06:30–07:06), each on the code as it stood while fixes were being made. These are **not** nine runs of an identical final build; the code changed between most of them. Together: 77 correct / 4 abstained / 0 wrong (graded at the time against provisional ground truth; no expectation changed when it was confirmed).
+- **Totals across all ten complete runs** (nine iterative development runs plus the one run of the final commit): 86 correct / 4 abstained / 0 wrong / 0 missing. No run gave a confident verdict the ground truth contradicts.

@@ -37,7 +37,7 @@ The app starts without keys; the UI banner and `/api/health` say what's missing.
 | historical_audit | "What did I ask you on 3 November? Still correct?" | deep | memory → plan → search → evidence → comparison → answer, guard and claim gate |
 | pricing_diff | "Has any pricing changed since last Tuesday?" | deep | the verified pricing pipeline: vendor-first search, plan-attributed quotes, deterministic comparison, timing, guard, required findings |
 
-The model proposes the intent; code decides (`chooseIntent` in [heuristics.ts](packages/core/src/agent/heuristics.ts)). A reference to an earlier conversation never skips memory, and a price check never skips the pricing verifier. Every answer grounded in search passes a **claim gate**: a line is shown only after every figure, date and version in it is found in a source it cites. Otherwise it is re-cited to the source that has it, or removed. Under each answer the UI shows, rendered from code rather than prose, what the sources covered, what they didn't, where they disagree, and how many statements were checked.
+The model proposes the intent; code decides (`chooseIntent` in [heuristics.ts](packages/core/src/agent/heuristics.ts)). A reference to an earlier conversation never skips memory, and a price check never skips the pricing verifier. Every lookup and research answer, and every non-pricing audit, passes a **claim gate**: each sentence (or table cell) is shown only after every figure, date and version in it is found in a source it cites. Otherwise it is re-cited to the source that has it, or removed ("not verified" in a table). Under each answer the UI shows, rendered from code rather than prose, what the sources covered, what they didn't, where they disagree, and how many statements were checked.
 
 ## Test memory with your own history
 
@@ -63,7 +63,7 @@ The format is in [docs/import-example.json](docs/import-example.json): `title?`,
 
 ![3 November recall: Copilot Pro, Business and Enterprise prices unchanged on GitHub's docs; Student, Pro+ and Max listed as also offered now](docs/screenshots/nov3.png)
 
-Screenshots are from the app against live Groq + Tavily on 2026-11-20 (3 November on the final commit). Live output varies between runs.
+Screenshots are from the app against live Groq + Tavily on 2026-11-20, taken on the earlier 83a5d11 snapshot. They show the challenge prompts, which run on the deep pipeline; the research-coverage panel added later appears only on lookup and research answers. Live output varies between runs.
 
 Every row in the table carries a **status** (changed / unchanged / uncertain / not comparable) and the **dimension** it concerns (price, pricing model, billing terms, currency, plan availability, features). Sources show whether they are the vendor's own page or third-party, plus their publish date (or "no publish date").
 
@@ -77,18 +77,27 @@ flowchart LR
   O --> M[(SQLite + FTS5<br/>conversations · messages<br/>research · evidence · cache)]
   O --> L[LLM client<br/>fast · extract · synthesis roles]
   O --> S[Web search: Tavily<br/>official-domain first · dedupe · rank · cache]
-  O --> R[Research engine<br/>evidence validator · price parser<br/>change detector · citation filters]
+  O --> R[Research engine<br/>claim verification · coverage · claim gate<br/>price parser · change detector · citation filters]
 ```
 
-`validate → resolve dates → analyze → route (chat · direct · deep)`. Direct: `search → rank → screen → stream answer over excerpts → filter citations/URLs/unsupported prices`. Deep: `recall memory → plan → search → extract evidence → verify → compare → stream answer → enforce facts + citations`. Then `persist`. Each stage reports progress over SSE (the UI shows it live) and runs within a budget. The pipeline handles missing credentials, invalid structured output and provider failures (including exhausted model or search quotas) with explicit errors or qualified partial answers, rather than silently presenting unverified facts.
+`validate → resolve dates → analyze → chooseIntent → pipeline → persist`, with four pipelines:
+
+- **chat:** `answer`.
+- **lookup:** `search (open, + official-domain when known) → rank/screen → coverage → [targeted follow-up] → answer → claim gate`.
+- **research:** `search → claim extraction (quotes verified in code) → coverage → [targeted follow-up] → answer → claim gate`.
+- **deep:** `recall memory → plan → vendor-first search → extract evidence → verify → compare → answer → guard + required findings` (plus the claim gate for non-pricing audits).
+
+Each stage reports progress over SSE (the UI shows it live) and runs within a budget. The pipeline handles missing credentials, invalid structured output and provider failures (including exhausted model or search quotas) with explicit errors or qualified partial answers, rather than silently presenting unverified facts.
 
 ```
 apps/api        Fastify routes: health, conversations, chat (SSE)
 apps/web        React + Vite + Tailwind UI
 packages/core   all agent logic (framework-free, unit-tested)
-  agent/        orchestrator, versioned prompts, context assembly, citation filters
+  agent/        orchestrator, intent routing, versioned prompts, context assembly,
+                citation filters, claim gate, answer guard, required findings
   temporal/     date resolver   memory/  hybrid retrieval, history import   llm/  provider adapters
-  search/       Tavily, normalisation, ranking, cache   research/  evidence, prices, comparison
+  search/       Tavily, normalisation, ranking, cache
+  research/     general evidence + coverage, pricing evidence, prices, comparison
   db/           node:sqlite, migrations, repositories   testing/  deterministic test doubles
 evals/          offline scenarios, live runner, grading, ground truth, reports
 ```
@@ -100,7 +109,7 @@ evals/          offline scenarios, live runner, grading, ground truth, reports
 - **One general evidence model.** Claims carry verbatim supporting quotes, source authority (official / primary / secondary) and confidence, all verified or computed in code. The pricing pipeline keeps its stricter, specialised model.
 - **Validate structure, not just prose.** The claim gate checks every figure against its citation before display. Required findings make sure no computed change or possible update is omitted. Coverage and disagreements are rendered from metadata. No new pricing-specific text rules were added.
 - **The model reads; code decides.** Extracted facts need a verbatim quote found in the source, a source that names the vendor, and a price tied to the named plan. Verdicts are computed by a tested price parser and comparator, never by the model.
-- **Official sources first.** Pricing searches target the vendor's domain (Tavily `include_domains`). If those pages show no visible prices, or budget remains, an open search runs too. Third-party verdicts are labeled as such.
+- **Official sources first.** Pricing searches target the vendor's domain (Tavily `include_domains`), with an open search if those pages show no visible prices or budget remains. Lookup and research run one query restricted to the official domains the analysis names (vetted in code) and drop pages for a different major version than the one asked about. Third-party verdicts are labeled as such.
 - **Honest uncertainty.** No evidence, conflicting sources, stale pages, pages published before the conversation, or prices not tied to the plan all yield "uncertain". "Not comparable" never means "unchanged".
 - **No native dependencies.** Built-in `node:sqlite` (FTS5) instead of better-sqlite3: unsigned native binaries were blocked on the development machine.
 - **Free-tier aware.** Groq quotas are per model, so roles are split across two models, with escalation (planning) and fallback (extraction on rate limit). Chat, lookup and research answers stream on the larger model (idle on those paths, with its own quota) and fall back to the smaller one if it is rate-limited. The Anthropic adapter is validated against the real API (structured output and streaming).
@@ -118,7 +127,7 @@ evals/          offline scenarios, live runner, grading, ground truth, reports
 
 CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs a clean `npm ci`, typecheck, lint, tests, offline evaluation and build on Ubuntu (Node 22 and 24) and Windows (Node 24).
 
-Offline scenarios test the deterministic machinery against known model outputs. They don't measure live model quality. The live suite does, graded against ground truth taken from official pages. **Every graded entry was human-confirmed on 2026-11-20** (the project author opened each page); vendors whose prices can't be retrieved (Render, AWS RDS, Pipedrive, Zoho) stay ungraded rather than guessed. Automatic checks don't judge answer prose. A code-level answer guard enforces the facts that live runs showed the model dropping or contradicting: "not checked" vs "none found", unverified prices called unchanged, launches no dated row supports, when a change happened, "not comparable" presented as a change, legacy plans, and prices that appear in no source. Other wording is still the model's.
+Offline scenarios test the deterministic machinery against known model outputs. They don't measure live model quality; the live suite does. Live evidence comes in three kinds, kept separate. Automatic checks judge behaviour. Ground truth for the challenge prompts was taken from official pages and **human-confirmed on 2026-11-20** (the project author opened each page); Render, AWS RDS, Pipedrive and Zoho stay ungraded rather than guessed. General-research answers are measured by automatic metrics, and their factual correctness is **pending human review**. In the deep pipeline, a code-level answer guard enforces the facts that live runs showed the model dropping or contradicting. Other wording is still the model's. Evaluation details, limitations and snapshot verification: [docs/evaluation.md](docs/evaluation.md).
 
 ## Known limitations
 

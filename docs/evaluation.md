@@ -2,13 +2,17 @@
 
 | Suite | Command | Network | Purpose |
 |---|---|---|---|
-| Tests | `npm test` | none | 226 unit + integration tests (Fastify inject, deterministic test doubles) |
-| Offline eval | `npm run eval` | none | 54 scenarios that pin down the deterministic machinery under known, including adversarial, model outputs → [evals/REPORT.md](../evals/REPORT.md) |
-| Live eval | `npm run eval:live` | Groq + Tavily | the 3 official prompts + 2 controls end-to-end, graded against ground truth → [evals/LIVE_REPORT.md](../evals/LIVE_REPORT.md) |
+| Suite | Command | Network | Purpose |
+|---|---|---|---|
+| Tests | `npm test` | none | 282 unit + integration tests in 20 files (Fastify inject, deterministic test doubles) |
+| Offline eval | `npm run eval` | none | 64 scenarios that pin down the deterministic machinery under known, including adversarial, model outputs → [evals/REPORT.md](../evals/REPORT.md) |
+| Live eval | `npm run eval:live` | Groq + Tavily | 28 cases end to end: the 3 challenge prompts, 2 controls, memory on imported history, 22 general-research cases → [evals/LIVE_REPORT.md](../evals/LIVE_REPORT.md) |
+
+This document has two parts. The sections up to [Limitations of the evaluation](#limitations-of-the-evaluation) describe the current state. The sections after it are a chronological development record: their numbers are as recorded at the time and are not rewritten, and "final" in an older heading refers to the snapshot of that day.
 
 ## Offline results (actual)
 
-**54/54 scenarios pass** (temporal 8, memory 8, web research 5, pricing 15 incl. completeness, product updates 4, multi-turn 3, uncertainty 3, adversarial 8, incl. the 3 demos). Full metrics are in [evals/REPORT.md](../evals/REPORT.md), which is deterministic, so CI fails if it goes stale.
+**64/64 scenarios pass** (temporal 8, memory 8, web research 5, pricing 15 incl. completeness, product updates 5, multi-turn 3, uncertainty 3, adversarial 8, general research 9, incl. the 3 demos). Full metrics are in [evals/REPORT.md](../evals/REPORT.md), which is deterministic, so CI fails if it goes stale.
 
 The scenarios were written alongside the code to pin down the behaviors in the brief, so 100% means "the specified behavior holds". It is not a benchmark of model quality. Examples:
 - flat → usage-based on an official page is a `pricing_model` change (P08);
@@ -18,17 +22,21 @@ The scenarios were written alongside the code to pin down the behaviors in the b
 - a price not tied to the plan blocks "changed" (P12);
 - per-seat vs team total is `not_comparable` (P07);
 - planted hallucinated source ids and fabricated quotes never survive (A02);
-- injected instructions in results are quarantined (A01).
+- injected instructions in results are quarantined (A01);
+- a coverage gap gets exactly one targeted follow-up query, never a repeat (G07);
+- two sources stating different dates are reported with both values (G08);
+- a figure in no retrieved source is removed before display, and a mis-cited one is re-cited (G09);
+- every computed change or possible update is stated in the answer (G10).
 
 ## Live evaluation design
 
 Offline testing (`npm test`, `npm run eval`) uses deterministic doubles and no network: it proves the machinery behaves as specified on known inputs. Live validation (`npm run eval:live`) uses real Groq + Tavily and is the only measure of end-to-end answer quality.
 
-Each live case is checked two ways.
+Three kinds of live evidence are kept separate: automatic checks (code judges behaviour), human-confirmed ground truth (challenge prompts only), and general-research answers, whose factual correctness is **pending human review**.
 
 **1. Automatic checks (pass/fail, no ground truth needed):**
 - **Completed:** the answer finished without error.
-- **Historical conversation:** the expected seeded conversation was retrieved (date resolution and memory).
+- **Historical conversation:** the expected seeded or imported conversation was retrieved (date resolution and memory).
 - **Searched when expected:** research questions search; small talk doesn't.
 - **Citations:** every `[S#]` in the answer resolves to a retrieved source, and research answers cite something.
 - **Entities covered:** every vendor from the earlier conversation gets a comparison row.
@@ -37,6 +45,7 @@ Each live case is checked two ways.
   - no amount change across different currency, period, billing, per-seat or usage unit (compatibility);
   - no `changed` resting on a page published before the conversation (historical cutoff).
 - **Plan attribution rate (reported):** the share of pricing evidence whose price is tied to the named plan (quote-to-claim relevance).
+- **General-research cases** add, where a case defines them: expected terms present (relevance), an expected intent chosen (routing), an official domain cited (source quality), all requested dimensions tracked (completeness), an abstention for unanswerable questions, and an injected claim not repeated. Coverage, gap disclosure, citation precision (claim gate), source authority and latency per pipeline are reported as metrics, not pass/fail.
 
 **2. Ground-truth grading** against [evals/ground-truth.json](../evals/ground-truth.json). Each entry quotes the vendor's official page. An AI agent first opened every page and found the quoted text (agent-verified, 2026-11-19 and 2026-11-20). **On 2026-11-20 the project author opened each official page and confirmed every graded entry (`review: "human-confirmed"`), so grades are no longer provisional.** Earlier sections of this document describe grades as provisional because they were at the time. Entries whose price couldn't be confirmed on the page (Render, AWS RDS, Pipedrive, Zoho) carry no expectation and are reported as *ungraded*, never guessed. Grades:
 
@@ -46,6 +55,29 @@ Each live case is checked two ways.
 | abstained | `uncertain` / `not_comparable` where a verdict was possible: honest but unhelpful |
 | wrong | a confident verdict ground truth contradicts, or a ruled-out status (e.g. "unchanged" for Salesforce "Enterprise", which no longer exists) |
 | missing | no comparison row for that vendor and plan |
+
+## Current live results (2026-11-20)
+
+Full run at 12:50 UTC, default configuration (Groq `gpt-oss-20b` + `gpt-oss-120b`, Tavily), 28 cases. Every answer is in [evals/LIVE_REPORT.md](../evals/LIVE_REPORT.md).
+
+| Evidence | Result |
+|---|---|
+| Automatic checks, full run | **21/28** passed |
+| Human-confirmed ground truth (challenge prompts) | 8 correct / 1 abstained / **0 wrong** / 0 missing; 4 entries ungraded (prices not retrievable) |
+| After the full run | the 7 failures were diagnosed: 5 agent defects fixed and 2 checker expectations corrected (both disclosed). The 7 cases were then re-run in targeted runs (`--only`) and all 7 passed |
+| General research (19 lookup/research cases, full run) | relevance 17/17 · routing 6/6 · coverage 70/72 cells · citation precision 48/56 · source authority 16% official/primary |
+| General research, factual correctness | **pending human review** |
+
+Details of each failure, its fix and the re-runs: [LIVE_REPORT.md](../evals/LIVE_REPORT.md#after-the-full-run-diagnosis-fixes-and-targeted-re-runs-2026-11-20-same-day).
+
+## Limitations of the evaluation
+
+- **One full run.** The 21/28 result is from code that predates the 5 agent fixes. After the fixes only the 7 failing cases were re-run (plus 2 latency checks); the 21 passing cases were not re-run live, and their behaviour after the fixes rests on the deterministic suites.
+- **Two checker corrections.** One abstention case was relaxed to accept "hasn't happened yet" without searching; the abstention regex was widened to accept "not provided in the available sources". Both changes were made after seeing results, and both are disclosed.
+- **Ground truth covers only the challenge prompts:** 9 human-confirmed verdict entries and 2 completeness entries; 4 vendor plans stay ungraded. General-research answers have automatic checks and metrics only. Two errors were found only by reading answers: a third-party "$4/user" Copilot Business price, and a v3 configuration hint in a Tailwind v4 answer.
+- **28 cases is a broad smoke test, not a statistical estimate.** Live results vary between runs because search results and model outputs vary.
+- **Lexical checks.** The claim gate verifies figures against the cited source, not the meaning of figure-free sentences, and not whether the cited source itself is correct.
+- **Free-tier quotas** limit live runs: Groq per-model tokens per minute and per day, and Tavily's 1,000 credits per month.
 
 ## Live results, rounds 1–2 (actual, 2026-11-15)
 
@@ -79,12 +111,6 @@ Each fix has a regression test or scenario.
 | Extraction empty despite visible prices | intermittent model output | one nudged retry |
 | Extraction impossible when 120b is rate-limited | quotas are per model | fallback to the fast model, noted in the answer |
 | Earlier rounds: "$190 for 10 seats" vs "$19/seat" = changed; flat vs per-CU-hour = changed; stale 2024 page as proof | comparator gaps | per-seat/usage/period compatibility, stale-page detection |
-
-## Limitations of the evaluation
-
-- 5 live cases is too few for statistical claims. The suite catches integration failures and tracks calibration (wrong vs abstained) across runs.
-- Ground truth is provisional until a person confirms each entry; several vendors couldn't be graded because their prices aren't in the fetched page text.
-- Groq free-tier quotas cap how many live runs fit in a day (about 4–5 full runs of 5 cases).
 
 ## Round 3 (final sprint, 2026-11-15)
 
@@ -205,7 +231,7 @@ No expectation was changed to improve a score. Copilot Business/Enterprise were 
 
 ### Automated checks (actual, from a clean `npm ci`)
 
-`npm run typecheck` 0 errors · `npm run lint` clean · `npm test` **177/177** · `npm run eval` **54/54** (REPORT.md regenerated byte-identical) · `npm run build` ok. The Round-4 changes were committed as 7311bf6; see [Final verification](#final-verification) for its CI run.
+`npm run typecheck` 0 errors · `npm run lint` clean · `npm test` **177/177** · `npm run eval` **54/54** (REPORT.md regenerated byte-identical) · `npm run build` ok. The Round-4 changes were committed as 7311bf6; see [Verification of the earlier 83a5d11 snapshot](#verification-of-the-earlier-83a5d11-snapshot) for CI.
 
 ## Final round (2026-11-19)
 
@@ -305,20 +331,20 @@ The project author opened each official page below and confirmed the quoted text
 
 Render, AWS RDS, Pipedrive and Zoho stay **ungraded** (prices not retrievable: JavaScript-rendered, HTTP 403, or an INR placeholder).
 
-## Final verification
+## Verification of the earlier 83a5d11 snapshot
 
-Everything below was verified against commit **83a5d11**, the final code, and its successful CI run (GitHub Actions run 44693956464).
+Historical record. Everything below was verified against commit **83a5d11**, the code at that time, and its successful CI run (GitHub Actions run 44693956464). The current snapshot is verified in [Verification of the latest snapshot (d3456e8)](#verification-of-the-latest-snapshot-d3456e8).
 
-- **Final code:** commit `83a5d1139c69fac6581d82ded42668552e0a7756` ("Final evaluation and docs updated"). The two commits after it (`8d733ff`, `dafb745`) change only documentation, the evaluation report, ground-truth review labels and dates, the 3 November screenshot, and the report renderer (`evals/live-runner.ts`: `--from` also recomputes completeness grades, and the report wording states the review date and grading status). No agent code changed.
+- **Code at that snapshot:** commit `83a5d1139c69fac6581d82ded42668552e0a7756` ("Final evaluation and docs updated"). The two commits after it (`8d733ff`, `dafb745`) change only documentation, the evaluation report, ground-truth review labels and dates, the 3 November screenshot, and the report renderer (`evals/live-runner.ts`: `--from` also recomputes completeness grades, and the report wording states the review date and grading status). No agent code changed.
 - **CI:** GitHub Actions run 44693956464 on 83a5d11: **success**, all three jobs (Ubuntu Node 22, Ubuntu Node 24, Windows Node 24), each with clean install, typecheck, lint, tests, offline evaluation, the report-up-to-date check and build.
 - **Fresh clone of 83a5d11** (`git clone` from GitHub, no `.env`, 2026-11-20): `npm install` ok · `npm run typecheck` 0 errors · `npm run lint` clean · `npm test` **226/226** (15 files) · `npm run eval` **54/54** (report content identical; only line endings differ under `core.autocrlf`) · `npm run build` ok · `npm run dev`: UI served, demo data seeded, `/api/health` names the missing keys, and chat returns a clear `NOT_CONFIGURED` error.
-- **Live, final commit:** full five-case run (2026-11-20 07:57 UTC, real Groq + Tavily, default configuration) on the final code: **5/5 automatic checks, 9 correct / 0 abstained / 0 wrong** against human-confirmed ground truth. Hand-graded: Cursor control complete. Every answer was read against its rows and sources; the remaining prose residue is listed above. Shown in full in [evals/LIVE_REPORT.md](../evals/LIVE_REPORT.md). (An earlier attempt the same morning ran out of daily model quota; the run history records it.)
+- **Live, 83a5d11:** full five-case run (2026-11-20 07:57 UTC, real Groq + Tavily, default configuration) on that code: **5/5 automatic checks, 9 correct / 0 abstained / 0 wrong** against human-confirmed ground truth. Hand-graded: Cursor control complete. Every answer was read against its rows and sources; the remaining prose residue is listed above. Shown in full in [evals/LIVE_REPORT.md](../evals/LIVE_REPORT.md). (An earlier attempt the same morning ran out of daily model quota; the run history records it.)
 - **Live, development sequence:** nine complete iterative runs (06:30–07:06), each on the code as it stood while fixes were being made. These are **not** nine runs of an identical final build; the code changed between most of them. Together: 77 correct / 4 abstained / 0 wrong (graded at the time against provisional ground truth; no expectation changed when it was confirmed).
-- **Totals across all ten complete runs** (nine iterative development runs plus the one run of the final commit): 86 correct / 4 abstained / 0 wrong / 0 missing. No run gave a confident verdict the ground truth contradicts.
+- **Totals across all ten complete runs** (nine iterative development runs plus the one run of 83a5d11): 86 correct / 4 abstained / 0 wrong / 0 missing. No run gave a confident verdict the ground truth contradicts.
 
 ## Routing change: chat · direct · deep (2026-11-20)
 
-**Why.** The review of the final build found the agent too narrow and slow for everyday questions. Every web question ran the pricing pipeline: the extractor looked "mainly for prices", the answer model saw only extracted facts and source titles, and latency was 16 s at the median (p90 42 s). Questions that don't involve an earlier conversation or a price check on a named product now take a direct path (see [architecture.md](architecture.md#execution-modes)).
+**Why.** The review of the final build found the agent too narrow and slow for everyday questions. Every web question ran the pricing pipeline: the extractor looked "mainly for prices", the answer model saw only extracted facts and source titles, and latency was 16 s at the median (p90 42 s). Questions that don't involve an earlier conversation or a price check on a named product now take a direct path (see [architecture.md](architecture.md#research-intents-and-pipelines); the `direct` path was split into `lookup` and `research` in the next round).
 
 **Offline (deterministic).** `npm test` **251/251** (18 files; new: `direct.test.ts`, `import.test.ts`, `routing.test.ts`) · `npm run eval` **60/60** (new category `general`, G01–G06: factual answer in 2 calls, concurrent comparison queries, exactly one broadened search on thin coverage, injection quarantine on the direct path, search-failure acknowledgement, follow-up context) · typecheck, lint and build clean.
 
@@ -359,3 +385,12 @@ Everything below was verified against commit **83a5d11**, the final code, and it
 **Latency by pipeline (full run, p50 / p90 total):** chat 1.9 / 2.0 s · lookup 6.2 / 10.2 s · research 10.4 / 15.4 s · deep 15.7 / 18.2 s. Search dominates (Tavily advanced: 2.5–7.7 s per round); the answer stage is 0.9–2.8 s. First status arrives within milliseconds. First answer words come after each sentence is checked, which is now sentence by sentence (previously line by line).
 
 **Problems found by reading answers** (no automatic check caught them): a third-party "$4/user" Copilot Business price in a comparison (the gate verifies figures against the *cited* source, not the source's correctness); a leftover v3 config hint in the Tailwind v4 answer. Both are listed for human review.
+
+## Verification of the latest snapshot (d3456e8)
+
+Commit `d3456e85c063a442f74cba711bf95e0c9711655b` ("Core design changes updated"), the submission snapshot.
+
+- **CI:** GitHub Actions run 44741937754 on d3456e8 completed with **success** (2026-11-20 13:10 UTC). All three jobs (Ubuntu Node 22, Ubuntu Node 24, Windows Node 24) passed clean install, typecheck, lint, tests and offline evaluation, then built. The report-up-to-date step ran on Ubuntu Node 24 and passed; the workflow skips it on the other two jobs.
+- **Local, clean working tree at d3456e8:** `npm test` **282/282** (20 files) · `npm run eval` **64/64**.
+- **Live:** no full live run was made on d3456e8 itself. The 12:50 UTC full run (21/28) and the 7 targeted re-runs used intermediate code during the research-engine round. The last two live checks (fact-python 4.3 s, cmp-bun-deno 15.8 s; both pass) ran on the agent code that was then committed; only documentation changed after them. These targeted runs don't overwrite LIVE_REPORT.md; their JSON traces are saved locally in `evals/results/`, which is not committed.
+- **Not repeated for d3456e8:** the fresh-clone check done for 83a5d11.

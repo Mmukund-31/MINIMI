@@ -961,7 +961,7 @@ Every complete live run saved in `evals/results/` (checks and grades as recorded
 
 ## After the full run: diagnosis, fixes and targeted re-runs (2026-11-20, same day)
 
-The full run above (12:50 UTC, 28 cases) is reported as recorded: **21/28 passed**. Each of the 7 failures was read and diagnosed. To save the free-tier search quota, only the affected cases were re-run after the fixes (`--only=…`, results in `evals/results/`), not the whole suite. The 21 passing cases were **not** re-run after the routing and gate changes; unchanged behaviour there is supported by the deterministic suites (280+ tests, 64 scenarios), not by a second live run.
+The full run above (12:50 UTC, 28 cases) is reported as recorded: **21/28 passed**. Each of the 7 failures was read and diagnosed. To save the free-tier search quota, only the affected cases were re-run after the fixes (`--only=…`, results in `evals/results/`), not the whole suite. The 21 passing cases were **not** re-run after the routing and gate changes; unchanged behaviour there is supported by the deterministic suites (282 tests, 64 scenarios), not by a second live run. Two further cases (fact-python, cmp-bun-deno) were run on the committed code as a latency check after the claim-gate streaming change; both passed (see docs/evaluation.md).
 
 | Case | Full-run failure | Cause | Fix | Re-run |
 |---|---|---|---|---|

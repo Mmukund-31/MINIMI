@@ -87,7 +87,7 @@ export class FixtureSearchProvider implements SearchProvider {
     if (entry === "timeout") throw new AppError("SEARCH_TIMEOUT", "Search timed out (fixture).", { retryable: true });
     if (entry === "error") throw new AppError("SEARCH_ERROR", "Search failed (fixture).", { retryable: true });
     return entry
-      .map((r) => normalizeResult({ ...r, query }, { provider: this.name, query, retrievedAt: this.retrievedAt }))
+      .map((r) => normalizeResult({ ...r, query }, { provider: this.name, query, retrievedAt: this.retrievedAt, fullText: opts.rawContent }))
       .filter((r): r is SearchResult => r !== null)
       // Honour include_domains like the real provider does.
       .filter((r) => !opts.includeDomains?.length || opts.includeDomains.some((d) => r.sourceDomain === d || r.sourceDomain.endsWith(`.${d}`)))

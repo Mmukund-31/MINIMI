@@ -9,6 +9,7 @@ export type ErrorCode =
   | "LLM_REFUSAL"
   | "SEARCH_ERROR"
   | "SEARCH_TIMEOUT"
+  | "SEARCH_QUOTA"
   | "BUDGET_EXCEEDED"
   | "TIMEOUT"
   | "CANCELLED"
@@ -42,6 +43,7 @@ function defaultStatus(code: ErrorCode): number {
     case "NOT_CONFIGURED":
       return 503;
     case "LLM_RATE_LIMIT":
+    case "SEARCH_QUOTA":
       return 429;
     case "TIMEOUT":
     case "SEARCH_TIMEOUT":

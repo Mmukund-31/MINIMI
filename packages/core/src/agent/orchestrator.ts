@@ -3,21 +3,24 @@ import type { Repositories, SearchRecordInput } from "../db/repositories";
 import type { LLMClient } from "../llm/client";
 import { UsageTracker } from "../llm/usage";
 import { MemoryRetriever, type MemoryResult } from "../memory/retrieval";
-import { assessOffering, compareProductUpdates, comparePricing, explainMissingEvidence } from "../research/change-detector";
-import { screenSources, validateEvidence, verifyHistoricalClaims } from "../research/evidence";
+import { addUnassessedUpdates, assessOffering, compareProductUpdates, comparePricing, explainMissingEvidence } from "../research/change-detector";
+import { looksLikeInjection, screenSources, validateEvidence, verifyHistoricalClaims } from "../research/evidence";
+import { assessPlanStatus } from "../research/plan-status";
+import { timingEvidence } from "../research/timing";
 import { AnalysisSchema, EvidenceExtractionSchema, PlanSchema, type Analysis, type Plan } from "../research/schemas";
 import type { CachedSearch } from "../search/cached";
 import { dedupeResults } from "../search/normalize";
-import { rankSources, trustedDomainHint, type QueryPurpose, type SubjectHint } from "../search/ranking";
+import { classifySource, isOfficialDomain, isUserGenerated, rankSources, trustedDomainHint, vendorDomains, type QueryPurpose, type SubjectHint } from "../search/ranking";
 import type { AppConfig } from "../shared/config";
 import { isValidTimezone } from "../shared/config";
 import { AppError, isAbortError, toAppError } from "../shared/errors";
 import { newId, nowIso } from "../shared/ids";
-import { subjectMatches, truncate } from "../shared/text";
+import { normalizeForMatch, planLabel, subjectMatches, truncate } from "../shared/text";
 import type {
   AgentEvent,
   Comparison,
   OfferingNote,
+  PlanStatusNote,
   Conversation,
   Evidence,
   ExecutionStats,
@@ -29,6 +32,7 @@ import type {
   Stage,
 } from "../shared/types";
 import { resolveTemporal, type TemporalResolution } from "../temporal/resolver";
+import { buildGuardRules, dropUnsupportedPrices, enforceAnswerFacts } from "./answer-guard";
 import { attachMissingCitations, CitationFilter, finalizeAnswer, StreamUrlFilter } from "./citations";
 import { buildSynthesisContext, formatClaims, formatMemory, formatRecent, formatSourcesForExtraction } from "./context";
 import { enforceRouting, followUpSuggestions, heuristicAnalysis, wantsUpdateCheck } from "./heuristics";
@@ -91,6 +95,7 @@ interface ExecutionState {
   evidence: Evidence[];
   comparisons: Comparison[];
   offering: OfferingNote[];
+  planStatus: PlanStatusNote[];
   /** Answer text streamed so far (kept if the run fails mid-answer). */
   partial: string;
   /** Client disconnect + execution deadline. Checked between stages. */
@@ -180,6 +185,7 @@ export class AgentOrchestrator {
       evidence: [],
       comparisons: [],
       offering: [],
+      planStatus: [],
       partial: "",
       signal,
     };
@@ -294,6 +300,7 @@ export class AgentOrchestrator {
           sources: sourceRefs,
           comparisons: state.comparisons,
           offering: state.offering,
+          planStatus: state.planStatus,
           memory: state.memory?.summary ?? { status: "not_requested", conversationIds: [], messageIds: [] },
           notes: state.notes,
           followUps: followUpSuggestions({
@@ -401,10 +408,13 @@ export class AgentOrchestrator {
       };
       // Domain-first applies to pricing only: update searches use the dated news index
       // (vendor pages rarely carry publication dates), where official changelogs still rank first.
-      const queue: Array<{ s: (typeof plan.searches)[number]; domain: string | null }> = plan.searches.map((s) => ({
+      const queue: Array<{ s: (typeof plan.searches)[number]; domain: string | null; filler?: boolean }> = plan.searches.map((s) => ({
         s,
         domain: s.purpose === "pricing" ? domainFor(s.subject) : null,
       }));
+      // One search stays in reserve for the timing check (compare stage) when earlier prices are
+      // being re-checked; only the optional open-web "filler" searches give it up.
+      const reserve = state.claims.some((c) => c.category === "pricing") ? 1 : 0;
       // Fallback searches run before update searches so price checks are never starved.
       const openQueued = new Set<string>();
       const enqueueFallback = (s: (typeof plan.searches)[number]) => {
@@ -417,12 +427,14 @@ export class AgentOrchestrator {
       // so a stale or wrong domain hint can't leave a vendor without evidence. Official pages
       // still rank first; third-party results only fill gaps (and are labelled as such).
       for (const q of [...queue]) {
-        if (q.domain) queue.push({ s: q.s, domain: null });
+        if (q.domain) queue.push({ s: q.s, domain: null, filler: true });
       }
       const openDone = new Set<string>();
+      let quotaError: string | null = null;
       const worker = async () => {
         while (queue.length > 0) {
-          const { s, domain } = queue.shift()!;
+          const { s, domain, filler } = queue.shift()!;
+          if (filler && state.tracker.searchCalls >= config.budgets.maxSearches - reserve) continue;
           // Each open-web query runs at most once (a fallback may have moved it earlier).
           if (!domain) {
             if (openDone.has(s.query)) continue;
@@ -441,7 +453,7 @@ export class AgentOrchestrator {
               // Vendor sites aren't in the news index, so domain-restricted searches use the general topic.
               topic: isUpdate && !domain ? "news" : "general",
               depth: isUpdate && !domain ? "basic" : "advanced",
-              includeDomains: domain ? [domain] : undefined,
+              includeDomains: domain ? vendorDomains(domain) : undefined,
               signal,
             });
             if (out.cached) state.tracker.cacheHits++;
@@ -452,7 +464,7 @@ export class AgentOrchestrator {
               retrievedAt,
               status: out.cached ? "cached" : "ok",
               resultCount: out.results.length,
-              metadata: { purpose: s.purpose, subject: s.subject, includeDomains: domain ? [domain] : [], urls: out.results.map((r) => r.url) },
+              metadata: { purpose: s.purpose, subject: s.subject, includeDomains: domain ? vendorDomains(domain) : [], urls: out.results.map((r) => r.url) },
             });
             emit({ type: "search", query: label, status: out.cached ? "cached" : "done", resultCount: out.results.length });
             // Official pages often render prices with JavaScript: if none are visible, also search the open web.
@@ -472,12 +484,18 @@ export class AgentOrchestrator {
             emit({ type: "search", query: label, status: "failed", error: e.message });
             if (domain) enqueueFallback(s);
             if (e.code === "NOT_CONFIGURED") throw e;
+            if (e.code === "SEARCH_QUOTA") {
+              // Every further search would fail the same way: stop and say why.
+              quotaError = e.message;
+              queue.length = 0;
+            }
           }
         }
       };
       await Promise.all([worker(), worker(), worker()]);
       const failed = state.searchRecords.filter((r) => r.status === "failed" || r.status === "timeout").length;
-      if (failed > 0) state.notes.push(`${failed} of ${state.searchRecords.length} web searches failed; results may be incomplete.`);
+      if (quotaError) state.notes.push(quotaError);
+      else if (failed > 0) state.notes.push(`${failed} of ${state.searchRecords.length} web searches failed; results may be incomplete.`);
 
       const purposeByQuery = new Map<string, QueryPurpose>(plan.searches.map((s) => [s.query, s.purpose]));
       const subjects: SubjectHint[] = plan.subjects.length ? plan.subjects : state.analysis.entities.map((name) => ({ name, officialDomain: null }));
@@ -553,14 +571,27 @@ export class AgentOrchestrator {
 
     // compare (deterministic)
     await this.stage(state, "compare", emit, async () => {
-      const pricing = explainMissingEvidence(comparePricing(state.claims, state.evidence), state.sources);
+      const comparePricingRows = () => explainMissingEvidence(comparePricing(state.claims, state.evidence), state.sources);
+      let pricing = comparePricingRows();
+      // Timing: a difference found on undated pages says nothing about when it happened. One
+      // bounded, deterministic search looks for a self-dated vendor page (see research/timing.ts).
+      const undated = pricing
+        .filter((c) => c.status === "changed" && c.changeTiming === "unknown" && (c.dimension === "pricing_model" || c.dimension === "price_amount") && c.currentValue)
+        .sort((a, b) => (a.dimension === "pricing_model" ? 0 : 1) - (b.dimension === "pricing_model" ? 0 : 1))[0];
+      if (undated && state.tracker.canSearch() && (await this.timingSearch(state, plan, undated, signal, emit))) pricing = comparePricingRows();
+      // Legacy plans: flagged by the extractor, or read from legacy-plan tables on the vendor's own pages.
+      const vendorOf = (s: Source) => plan.subjects.find((x) => isOfficialDomain(s.sourceDomain, [x]))?.name;
+      state.planStatus = assessPlanStatus(state.evidence, state.sources.map((s) => ({ ...s, subject: vendorOf(s) })));
       const subjectNames = plan.subjects.map((s) => s.name);
       // Product-update rows only when the user asked about launches/updates or whether an answer is
-      // still correct (deterministic gate), and "not checked" when no update search actually ran.
-      const executed = new Set(state.searchRecords.filter((r) => r.status === "ok" || r.status === "cached").map((r) => r.query));
+      // still correct (deterministic gate). "Not checked" when no update search ran, or it returned nothing.
+      const ok = state.searchRecords.filter((r) => r.status === "ok" || r.status === "cached");
+      const ran = updateSearchedSubjects(plan.searches, new Set(ok.map((r) => r.query)));
+      const gotResults = updateSearchedSubjects(plan.searches, new Set(ok.filter((r) => r.resultCount > 0).map((r) => r.query)));
+      const coverage = (subject: string) => (gotResults(subject) ? "checked" : ran(subject) ? "no_results" : "not_run") as "checked" | "no_results" | "not_run";
       const updates =
         wantsUpdateCheck(state.userMessage.content) && subjectNames.length
-          ? compareProductUpdates(subjectNames, state.evidence, state.memory?.summary.baselineDate, updateSearchedSubjects(plan.searches, executed))
+          ? addUnassessedUpdates(compareProductUpdates(subjectNames, state.evidence, state.memory?.summary.baselineDate, coverage), state.sources, state.memory?.summary.baselineDate)
           : [];
       state.comparisons = [...pricing, ...updates];
       const earlierAnswers = (state.memory?.exchanges ?? []).map((e) => e.assistant?.content ?? "").join("\n");
@@ -590,6 +621,7 @@ export class AgentOrchestrator {
       memoryRequested: state.analysis.needsMemory,
       comparisons: state.comparisons,
       offering: state.offering,
+      planStatus: state.planStatus,
       evidence: state.evidence,
       sources: state.sources,
       notes: state.notes,
@@ -627,8 +659,24 @@ export class AgentOrchestrator {
     }
     state.stageMs.synthesize = Date.now() - t0;
     emit({ type: "stage", stage: "synthesize", status: "done" });
+    // Code-level constraints: the prose may not contradict the computed rows (see answer-guard.ts).
+    const guarded = enforceAnswerFacts(final.text, buildGuardRules({ comparisons: state.comparisons, planStatus: state.planStatus, question: state.userMessage.content }));
+    if (guarded.applied.length) this.logger.info({ executionId: state.id, rules: guarded.applied }, "answer guard applied");
+    // Prices the model states must exist somewhere it was given (evidence, rows, sources, memory).
+    const support = [
+      ...state.evidence.flatMap((e) => [e.value, e.quote]),
+      ...state.comparisons.flatMap((c) => [c.previousValue ?? "", c.currentValue ?? "", c.explanation]),
+      ...state.offering.flatMap((o) => o.plansNotDiscussed.map((p) => p.value)),
+      ...state.planStatus.flatMap((n) => [n.value, n.successor?.value ?? ""]),
+      ...state.sources.map((s) => `${s.title} ${s.snippet} ${s.content ?? ""}`),
+      ...(state.memory?.exchanges ?? []).flatMap((x) => [x.user?.content ?? "", x.assistant?.content ?? ""]),
+      ...recent.map((m) => m.content),
+      state.userMessage.content,
+    ].join("\n");
+    const priced = dropUnsupportedPrices(guarded.text, support, state.userMessage.content);
+    if (priced.removed.length) this.logger.warn({ executionId: state.id, removed: priced.removed }, "removed sentences with unsupported prices");
     // Attach citations the model omitted for verified values (deterministic; see attachMissingCitations).
-    const content = attachMissingCitations(final.text, state.evidence);
+    const content = attachMissingCitations(priced.text, state.evidence);
     const citedIds = new Set([...content.matchAll(/\[(S\d+)\]/g)].map((m) => m[1]!));
     // Sources list: cited ones first, then the others that informed comparisons.
     const cited = state.sources.filter((s) => citedIds.has(s.id));
@@ -638,6 +686,63 @@ export class AgentOrchestrator {
   }
 
   // ── helpers ─────────────────────────────────────────────────────────
+
+  /**
+   * One timing search for a "changed" row whose pages are undated. Adds deterministic historical
+   * evidence (and its source) only for a vendor-owned page that dates itself before the
+   * conversation and already shows the plan in its current shape. Returns true if evidence was added.
+   */
+  private async timingSearch(state: ExecutionState, plan: Plan, row: Comparison, signal: AbortSignal, emit: (e: AgentEvent) => void): Promise<boolean> {
+    const claim = state.claims.find((c) => c.category === "pricing" && subjectMatches(c.subject, row.subject) && normalizeForMatch(c.attribute) === normalizeForMatch(row.attribute));
+    if (!claim || !this.deps.search) return false;
+    const query = `${planLabel(row.subject, row.attribute)} pricing change`;
+    const label = `${query} (timing check)`;
+    state.tracker.beginSearch();
+    emit({ type: "search", query: label, status: "start" });
+    const retrievedAt = nowIso();
+    let results: SearchResult[];
+    try {
+      const out = await this.deps.search.search(query, { maxResults: 5, topic: "general", depth: "advanced", rawContent: true, signal });
+      if (out.cached) state.tracker.cacheHits++;
+      results = out.results.map((r) => ({ ...r, query }));
+      state.searchRecords.push({ query, provider: this.deps.search.name, retrievedAt, status: out.cached ? "cached" : "ok", resultCount: results.length, metadata: { purpose: "timing", subject: row.subject, urls: results.map((r) => r.url) } });
+      emit({ type: "search", query: label, status: out.cached ? "cached" : "done", resultCount: results.length });
+    } catch (err) {
+      if (isAbortError(err) && signal.aborted) throw err;
+      const e = toAppError(err);
+      state.searchRecords.push({ query, provider: this.deps.search.name, retrievedAt, status: e.code === "SEARCH_TIMEOUT" ? "timeout" : "failed", resultCount: 0, metadata: { purpose: "timing", error: e.message } });
+      emit({ type: "search", query: label, status: "failed", error: e.message });
+      state.notes.push(e.code === "SEARCH_QUOTA" ? e.message : `The timing search for ${row.subject} failed, so when its pricing changed is unknown.`);
+      return false;
+    }
+    const subjects: SubjectHint[] = plan.subjects.length ? plan.subjects : [{ name: row.subject, officialDomain: null }];
+    const found = timingEvidence(results, {
+      subject: row.subject,
+      plan: row.attribute,
+      currentValue: row.currentValue!,
+      dimension: row.dimension as "pricing_model" | "price_amount",
+      isVendorOwned: (r) => isOfficialDomain(r.sourceDomain, subjects) && !isUserGenerated(r.url, r.sourceDomain),
+      now: state.now,
+    })
+      .filter((f) => !looksLikeInjection(f.excerpt) && Date.parse(f.result.pageDate.date) < Date.parse(claim.statedAt))
+      .sort((a, b) => Date.parse(a.result.pageDate.date) - Date.parse(b.result.pageDate.date));
+    const f = found[0];
+    if (!f) {
+      state.notes.push(`A timing search for ${row.subject} found no dated page on the vendor's site, so when its pricing changed is unknown.`);
+      return false;
+    }
+    let src = state.sources.find((s) => s.url === f.result.url);
+    if (src) {
+      src.content = `${src.content ?? ""}\n…\n${f.excerpt}`;
+      src.pageDate ??= f.result.pageDate;
+    } else {
+      src = { ...f.result, snippet: truncate(f.excerpt, 300), content: f.excerpt, id: `S${state.sources.length + 1}`, kind: classifySource(f.result, subjects), rankScore: 0 };
+      state.sources.push(src);
+      emit({ type: "sources", sources: state.sources.map(toSourceRef) });
+    }
+    state.evidence.push({ ...f.evidence, id: newId("ev"), sourceId: src.id, sourceKind: src.kind });
+    return true;
+  }
 
   private async stage(state: ExecutionState, stage: Stage, emit: (e: AgentEvent) => void, fn: () => Promise<string | undefined>): Promise<void> {
     state.signal.throwIfAborted(); // stop promptly after a client disconnect or deadline

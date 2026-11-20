@@ -170,6 +170,14 @@ describe("finalizeAnswer", () => {
     expect(r.text).toBe("See pricing and. Real: https://vendor.com/pricing?utm_source=a");
     expect(r.removedUrls).toEqual(["https://evil.example/x", "https://made-up.example/p"]);
   });
+  it("drops placeholder citations the model invents when it has no source (live 2026-11-19)", () => {
+    expect(finalizeAnswer("No pricing or feature changes were found for Pipedrive or Zoho [unspecified evidence].", []).text).toBe(
+      "No pricing or feature changes were found for Pipedrive or Zoho.",
+    );
+    expect(finalizeAnswer("Unverified [citation needed]. Kept [S2] and [no-code tools](https://x.com/a).", ["https://x.com/a"]).text).toBe(
+      "Unverified. Kept [S2] and [no-code tools](https://x.com/a).",
+    );
+  });
 });
 
 describe("attachMissingCitations", () => {

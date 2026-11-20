@@ -2,6 +2,7 @@ import { normalizeForMatch, subjectMatches } from "../shared/text";
 import type { Comparison, ComparisonDimension, Evidence, HistoricalClaim, OfferingNote, Source, SourceKind } from "../shared/types";
 import { textMentionsSubject } from "./evidence";
 import { parsePrice, type ParsedPrice } from "./price";
+import { describePageDate } from "../search/page-date";
 
 /**
  * Deterministic comparison engine. The LLM never decides whether something
@@ -131,6 +132,8 @@ function pickBest(evs: Evidence[]): Evidence[] {
 
 export function comparePricing(claims: HistoricalClaim[], evidence: Evidence[]): Comparison[] {
   const current = evidence.filter((e) => e.category === "pricing" && e.evidenceType === "current");
+  // Dated vendor pages found only to establish timing (never used as the current price).
+  const timingOnly = evidence.filter((e) => e.category === "pricing" && e.evidenceType === "historical");
   const out: Comparison[] = [];
   for (const claim of claims.filter((c) => c.category === "pricing")) {
     const forSubject = current.filter((e) => subjectMatches(e.subject, claim.subject));
@@ -239,13 +242,32 @@ export function comparePricing(claims: HistoricalClaim[], evidence: Evidence[]):
     // Historical cutoff: a page published before the conversation can't show a change *since* it.
     // If that page is the vendor's own and the price is tied to the plan, it shows something else:
     // the earlier answer was likely already out of date when it was given.
+    // Timing evidence: any vendor-owned, plan-verified page for this plan that is dated (by the
+    // provider, its URL, an explicit "last updated" line or a blog byline) before the conversation
+    // and already shows the current state: same amount, or same pricing model (usage vs flat).
     let historicalAccuracy: Comparison["historicalAccuracy"] = "unknown";
-    if (status === "changed" && best.publishedAt && Date.parse(best.publishedAt) < Date.parse(claim.statedAt)) {
-      status = "uncertain";
-      if (isOfficial(best) && best.planVerified !== false) {
+    let changeTiming: Comparison["changeTiming"];
+    let timingEvidence: Evidence | undefined;
+    if (status === "changed") {
+      const statedAt = Date.parse(claim.statedAt);
+      const dateOf = (e: Evidence) => e.publishedAt ?? e.pageDate?.date;
+      const showsCurrent = (e: Evidence) => {
+        const p = parsePrice(e.value);
+        return dimension === "pricing_model" ? (p.usageUnit !== null) === (bestParsed.usageUnit !== null) : comparePrices(bestParsed, p).status === "unchanged";
+      };
+      const pool = [...samePlan, ...timingOnly.filter((e) => subjectMatches(e.subject, claim.subject) && planMatches(e.attribute, claim.attribute, claim.subject))];
+      const earlier = pool
+        .filter((e) => KIND_RANK[e.sourceKind] >= 3 && e.planVerified !== false && dateOf(e) && Date.parse(dateOf(e)!) < statedAt && showsCurrent(e))
+        .sort((a, b) => Date.parse(dateOf(a)!) - Date.parse(dateOf(b)!));
+      if (earlier.length) {
+        timingEvidence = earlier[0]!;
+        const when = timingEvidence.publishedAt ? `published ${timingEvidence.publishedAt.slice(0, 10)}` : `dated ${describePageDate(timingEvidence.pageDate!)}`;
+        status = "uncertain";
         historicalAccuracy = "already_outdated";
-        explanation = `The vendor's own page, published ${best.publishedAt.slice(0, 10)} (before our conversation on ${claim.statedAt.slice(0, 10)}), already listed ${best.value}. The earlier answer was likely out of date when given, rather than the price changing since.`;
-      } else {
+        changeTiming = "before_conversation";
+        explanation = `The vendor's own page (${when}, before our conversation on ${claim.statedAt.slice(0, 10)}) already listed ${dimension === "pricing_model" ? `${timingEvidence.attribute} as usage-based (${timingEvidence.value})` : timingEvidence.value}. The earlier answer was likely already out of date when given; this doesn't show a change since then.`;
+      } else if (best.publishedAt && Date.parse(best.publishedAt) < statedAt) {
+        status = "uncertain";
         explanation = `The differing value comes from a page published ${best.publishedAt.slice(0, 10)}, before our conversation (${claim.statedAt.slice(0, 10)}), so it doesn't show a change since then.`;
       }
     }
@@ -273,7 +295,13 @@ export function comparePricing(claims: HistoricalClaim[], evidence: Evidence[]):
     } else if (!isOfficial(best) && verdict()) {
       explanation += " No official pricing page confirmed this; based on a third-party source.";
     }
-    const used = [best, ...conflicting];
+    if (status === "changed") {
+      changeTiming = best.publishedAt ? "after_conversation" : "unknown";
+      if (changeTiming === "unknown") {
+        explanation += ` The vendor's pages are undated, so this shows the earlier answer no longer matches; it can't show whether the change came before or after our conversation.`;
+      }
+    }
+    const used = [best, ...conflicting, ...(timingEvidence && timingEvidence !== best ? [timingEvidence] : [])];
     if (status === "unchanged") historicalAccuracy = "consistent";
     out.push({
       ...base,
@@ -281,6 +309,7 @@ export function comparePricing(claims: HistoricalClaim[], evidence: Evidence[]):
       status,
       dimension,
       historicalAccuracy,
+      ...(changeTiming ? { changeTiming } : {}),
       explanation,
       evidenceIds: used.map((e) => e.id),
       sourceIds: [...new Set(used.map((e) => e.sourceId))],
@@ -352,16 +381,38 @@ export function compareProductUpdates(
   subjects: string[],
   evidence: Evidence[],
   baselineDate: string | undefined,
-  /** Subjects that actually had an update-focused search; others are reported as "not checked". */
-  searchedFor?: (subject: string) => boolean,
+  /**
+   * Update-search coverage per subject: "checked" (an update search returned results), "no_results"
+   * or "not_run" (both reported as "Not checked"). A boolean predicate means checked / not_run.
+   */
+  searchedFor?: (subject: string) => boolean | "checked" | "no_results" | "not_run",
 ): Comparison[] {
   const updates = evidence.filter((e) => e.category === "product_update");
   const baseline = baselineDate ? Date.parse(baselineDate) : undefined;
   const out: Comparison[] = [];
   for (const subject of subjects) {
     const mine = updates.filter((e) => subjectMatches(e.subject, subject) && e.significance === "major");
-    const after = mine.filter((e) => e.publishedAt && (baseline === undefined || Date.parse(e.publishedAt) >= baseline));
+    const dated = mine.filter((e) => e.publishedAt && (baseline === undefined || Date.parse(e.publishedAt) >= baseline));
+    // Like pricing verdicts, "changed" needs authority: the vendor's own page or reputable news.
+    // A dated third-party post is reported as a possible update, never as a confirmed launch.
+    const after = dated.filter((e) => KIND_RANK[e.sourceKind] >= KIND_RANK.news);
+    const thirdOnly = dated.filter((e) => KIND_RANK[e.sourceKind] < KIND_RANK.news);
     const undated = mine.filter((e) => !e.publishedAt);
+    if (after.length === 0 && thirdOnly.length > 0) {
+      const e = pickBest(thirdOnly)[0]!;
+      out.push({
+        subject,
+        category: "product_update",
+        attribute: "Possible update",
+        dimension: "feature",
+        currentValue: e.value,
+        status: "uncertain",
+        explanation: `Reported only by a third-party page published ${e.publishedAt!.slice(0, 10)}; not confirmed by the vendor or reputable news.`,
+        evidenceIds: [e.id],
+        sourceIds: [e.sourceId],
+      });
+      continue;
+    }
     for (const e of pickBest(after).slice(0, 2)) {
       out.push({
         subject,
@@ -390,7 +441,8 @@ export function compareProductUpdates(
       });
     }
     if (after.length === 0 && undated.length === 0) {
-      const checked = searchedFor ? searchedFor(subject) : true;
+      const cov = searchedFor ? searchedFor(subject) : true;
+      const checked = cov === true || cov === "checked";
       out.push({
         subject,
         category: "product_update",
@@ -399,11 +451,42 @@ export function compareProductUpdates(
         status: "uncertain",
         explanation: checked
           ? "No major update dated after our conversation appeared in the sources searched. That isn't proof nothing shipped."
-          : "Not checked: the search budget was spent on pricing, so no update-focused search ran for this subject.",
+          : cov === "no_results"
+            ? "Not checked: the update search for this subject returned no results."
+            : "Not checked: the search budget was spent on pricing, so no update-focused search ran for this subject.",
         evidenceIds: [],
         sourceIds: [],
       });
     }
   }
   return out;
+}
+
+/**
+ * Deterministic backstop for update extraction (live 2026-11-20: the Copilotforce announcement was
+ * extracted in two runs and missed in two). If a subject's row says nothing dated was found, but a
+ * vendor-owned or reputable-news page in the sources is dated after the conversation and names the
+ * subject in its title, report it as a possible update. Significance isn't judged, so it's never "changed".
+ */
+export function addUnassessedUpdates(rows: Comparison[], sources: Source[], baselineDate: string | undefined): Comparison[] {
+  if (!baselineDate) return rows;
+  const baseline = Date.parse(baselineDate);
+  return rows.map((r) => {
+    if (r.category !== "product_update" || r.status !== "uncertain" || r.evidenceIds.length > 0 || /^Not checked/.test(r.explanation)) return r;
+    const s = sources.find(
+      (x) =>
+        (x.kind === "official_changelog" || x.kind === "official" || x.kind === "news") &&
+        x.publishedAt &&
+        Date.parse(x.publishedAt) >= baseline &&
+        textMentionsSubject(x.title, r.subject),
+    );
+    if (!s) return r;
+    return {
+      ...r,
+      attribute: "Possible update",
+      currentValue: s.title,
+      explanation: `A ${s.kind === "news" ? "news" : "vendor"} page published ${s.publishedAt!.slice(0, 10)}, after our conversation, names ${r.subject}; how significant it is wasn't assessed.`,
+      sourceIds: [s.id],
+    };
+  });
 }

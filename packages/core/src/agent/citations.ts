@@ -212,6 +212,20 @@ export function finalizeAnswer(text: string, sourceUrls: string[]): { text: stri
     return trailing;
   });
   out = out.replace(/\[([^\]]+)\]\(\s*\)/g, "$1"); // links emptied by the streaming URL guard
+  // Placeholder "citations" the model writes when it has no source id (live 2026-11-19: "[unspecified evidence]").
+  out = out.replace(/\s*\[(?:unspecified|unknown|no|missing|unverified|citation needed|source needed|needs? (?:a )?source)\b[^\]\n]{0,40}\](?!\()/gi, "");
+  out = out.replace(/(\[S\d+\])(?:\s*\1)+/g, "$1"); // "[S1][S1][S1]" → "[S1]"
+  // The model sometimes cites our own context tags ("[comparisons]", "[evidence]") instead of a source id.
+  out = out.replace(/\s*\[(?:comparisons?|evidence|sources?|memory|notes?|offering|plan_status|table)\](?!\()/gi, "");
+  // Fullwidth-bracket fragments that aren't source ids ("【comparisons]", "【table】").
+  out = out.replace(/\s*【(?!\s*S\d)[^】\]\n]{0,40}[】\]]/g, "");
+  // A citation-only fragment after a cited sentence ("… [S5]. [S5][S6][S7]") adds nothing readable.
+  out = out.replace(/(\[S\d+\]\s*[.!?])[ \t]+(?:\[S\d+\]\s*)+(?=\n|$)/g, "$1");
+  // An odd number of "**" on a line leaves a stray marker in the rendered text: drop the last one.
+  out = out
+    .split("\n")
+    .map((line) => ((line.match(/\*\*/g) ?? []).length % 2 === 1 ? line.replace(/\*\*(?!.*\*\*)/, "") : line))
+    .join("\n");
   out = out.replace(/[ \t]+([.,;:])/g, "$1").replace(/[ \t]{2,}/g, " ");
   return { text: out.trim(), removedUrls };
 }

@@ -29,6 +29,9 @@ export interface FindingSpec {
   value: string;
   quote: string;
   category?: "pricing" | "other";
+  planStatus?: "current" | "legacy";
+  statusQuote?: string;
+  successor?: string;
 }
 export interface UpdateSpec {
   domain: string;
@@ -57,7 +60,7 @@ export function evidenceResponder(
       findings: [
         ...findings
           .filter((f) => pick(f.domain, f.quote))
-          .map((f) => ({ subject: f.subject, category: f.category ?? "pricing", attribute: f.attribute, value: f.value, quote: f.quote, sourceId: pick(f.domain, f.quote)! })),
+          .map((f) => ({ subject: f.subject, category: f.category ?? "pricing", attribute: f.attribute, value: f.value, quote: f.quote, sourceId: pick(f.domain, f.quote)!, ...(f.planStatus ? { planStatus: f.planStatus, statusQuote: f.statusQuote ?? null, successor: f.successor ?? null } : {}) })),
         ...rawFindings,
       ],
       updates: updates

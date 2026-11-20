@@ -1,6 +1,6 @@
 import { formatLocal } from "../temporal/resolver";
-import { truncate } from "../shared/text";
-import type { Comparison, Evidence, HistoricalClaim, MemoryExchange, MemorySummary, Message, OfferingNote, Source } from "../shared/types";
+import { planLabel, truncate } from "../shared/text";
+import type { Comparison, Evidence, HistoricalClaim, MemoryExchange, MemorySummary, Message, OfferingNote, PlanStatusNote, Source } from "../shared/types";
 
 /**
  * Context assembly. Every block is size-bounded so prompts stay within the
@@ -109,6 +109,8 @@ export interface SynthesisInput {
   comparisons: Comparison[];
   /** Current plans the earlier answer did not discuss (completeness). */
   offering?: OfferingNote[];
+  /** Plans the vendor lists as legacy (verified). */
+  planStatus?: PlanStatusNote[];
   evidence: Evidence[];
   sources: Source[];
   notes: string[];
@@ -137,7 +139,7 @@ export function buildSynthesisContext(i: SynthesisInput): string {
   if (i.comparisons.length > 0) {
     const rows = i.comparisons.map(
       (c) =>
-        `- ${c.subject} | ${c.category} | ${c.attribute} | then: ${c.previousValue ?? "n/a"} | now: ${c.currentValue ?? "n/a"} | status: ${c.status} | dimension: ${c.dimension} | ${c.explanation}${c.sourceIds.length ? ` | sources: ${c.sourceIds.map((s) => `[${s}]`).join("")}` : ""}`,
+        `- ${c.subject} | ${c.category} | ${c.attribute} | then: ${c.previousValue ?? "n/a"} | now: ${c.currentValue ?? "n/a"} | status: ${c.status} | dimension: ${c.dimension}${c.historicalAccuracy === "already_outdated" ? " | earlier answer already out of date" : ""}${c.changeTiming ? ` | timing: ${c.changeTiming}` : ""} | ${c.explanation}${c.sourceIds.length ? ` | sources: ${c.sourceIds.map((s) => `[${s}]`).join("")}` : ""}`,
     );
     parts.push(`<comparisons>\n${truncate(rows.join("\n"), Math.floor(budget * 0.2))}\n</comparisons>`);
   }
@@ -145,6 +147,13 @@ export function buildSynthesisContext(i: SynthesisInput): string {
   if (i.offering?.length) {
     const lines = i.offering.map((o) => `- ${o.subject}: ${o.plansNotDiscussed.map((p) => `${p.plan} (${p.value}) [${p.sourceId}]`).join("; ")}`);
     parts.push(`<offering>\n${truncate(lines.join("\n"), Math.floor(budget * 0.08))}\n</offering>`);
+  }
+
+  if (i.planStatus?.length) {
+    const lines = i.planStatus.map(
+      (n) => `- ${planLabel(n.subject, n.plan)} (${n.value}) is LEGACY [${n.sourceId}]: "${truncate(n.statusQuote, 160)}"${n.successor ? ` | closest current tier: ${n.successor.plan} (${n.successor.value}) [${n.successor.sourceId}]` : ""}`,
+    );
+    parts.push(`<plan_status>\n${lines.join("\n")}\n</plan_status>`);
   }
 
   if (i.evidence.length > 0) {

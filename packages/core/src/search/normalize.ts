@@ -1,9 +1,12 @@
 import type { SearchResult } from "../shared/types";
+import { pageDate } from "./page-date";
 
 const TRACKING_PARAMS = /^(utm_|fbclid$|gclid$|mc_cid$|mc_eid$|ref$|ref_src$|_hs|hsa_|mkt_tok$|igshid$|si$)/i;
 const MAX_TITLE = 300;
 const MAX_SNIPPET = 1_200;
 const MAX_CONTENT = 6_000;
+/** Full-page mode (timing check only): enough text to reach pricing sections further down. */
+const MAX_FULL_CONTENT = 40_000;
 
 /**
  * Canonical URL used for de-duplication and citation identity:
@@ -55,14 +58,17 @@ export function normalizePublishedDate(raw: unknown): string | undefined {
   return new Date(t).toISOString();
 }
 
-export function normalizeResult(r: Partial<SearchResult> & { url: string }, defaults: { provider: string; query: string; retrievedAt: string }): SearchResult | null {
+export function normalizeResult(r: Partial<SearchResult> & { url: string }, defaults: { provider: string; query: string; retrievedAt: string; fullText?: boolean }): SearchResult | null {
   const url = normalizeUrl(r.url);
   if (!url) return null;
+  // Dated from the untruncated text; bylines only from full page text.
+  const dated = r.pageDate ?? pageDate(url, r.content, { fullText: defaults.fullText });
   return {
+    ...(dated ? { pageDate: dated } : {}),
     title: cleanText(r.title, MAX_TITLE) || domainOf(url),
     url,
     snippet: cleanText(r.snippet, MAX_SNIPPET),
-    content: r.content ? cleanText(r.content, MAX_CONTENT) : undefined,
+    content: r.content ? cleanText(r.content, defaults.fullText ? MAX_FULL_CONTENT : MAX_CONTENT) : undefined,
     publishedAt: normalizePublishedDate(r.publishedAt),
     retrievedAt: r.retrievedAt ?? defaults.retrievedAt,
     sourceDomain: domainOf(url),
@@ -88,6 +94,7 @@ export function dedupeResults(results: SearchResult[]): SearchResult[] {
       snippet: better.snippet.length >= other.snippet.length ? better.snippet : other.snippet,
       content: (better.content?.length ?? 0) >= (other.content?.length ?? 0) ? better.content : other.content,
       publishedAt: better.publishedAt ?? other.publishedAt,
+      pageDate: better.pageDate ?? other.pageDate,
     });
   }
   return mergeSamePage([...byUrl.values()]);
@@ -122,6 +129,7 @@ export function mergeSamePage(results: SearchResult[]): SearchResult[] {
       snippet: best.snippet,
       content: chunks.join("\n…\n").slice(0, 8_000),
       publishedAt: g.map((r) => r.publishedAt).find(Boolean),
+      pageDate: g.map((r) => r.pageDate).find(Boolean),
     };
   });
 }

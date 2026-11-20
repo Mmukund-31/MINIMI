@@ -10,6 +10,8 @@ export interface SearchOptions {
   depth?: "basic" | "advanced";
   /** Restrict results to these domains (used to reach the vendor's own pricing/changelog pages). */
   includeDomains?: string[];
+  /** Return the full page text (bounded) instead of query-focused excerpts; used by the timing check. */
+  rawContent?: boolean;
   signal?: AbortSignal;
 }
 

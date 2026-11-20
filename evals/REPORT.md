@@ -28,9 +28,9 @@ These numbers measure the **system's deterministic machinery** (temporal resolut
 | Comparison status accuracy | 100.0% | 39/39 expected statuses (changed / unchanged / uncertain / not comparable) |
 | Change-detection precision | 100.0% | "changed" predictions that were real (6 TP, 0 FP) |
 | Change-detection recall | 100.0% | real changes detected (0 missed) |
-| Citation correctness | 100.0% | 24/24 citations in final answers resolve to retrieved sources |
+| Citation correctness | 100.0% | 30/30 citations in final answers resolve to retrieved sources |
 | Planted fabrications surviving validation | 0/4 | hallucinated source ids / non-verbatim quotes injected into model output |
-| Search calls per request | avg 4.18, max 10 | end-to-end scenarios |
+| Search calls per request | avg 4.14, max 10 | end-to-end scenarios |
 | End-to-end latency (offline) | every scenario under 250 ms | pipeline overhead only, no network/model latency (kept coarse so the report only changes when results do) |
 | Token consumption | n/a offline | scripted model; see live run |
 | Unexpected error rate | 0.0% | runs that threw when no error was expected |

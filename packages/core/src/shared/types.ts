@@ -37,6 +37,8 @@ export interface MessageMetadata {
   comparisons?: Comparison[];
   /** Current plans seen on vendor pages that the earlier answer did not mention (completeness, not change). */
   offering?: OfferingNote[];
+  /** Plans the vendor lists as legacy (computed in code from verified quotes). */
+  planStatus?: PlanStatusNote[];
   memory?: MemorySummary;
   notes?: string[];
   followUps?: string[];
@@ -59,6 +61,17 @@ export interface SearchResult {
   /** Provider relevance score in [0,1] where available. */
   providerScore?: number;
   query: string;
+  /**
+   * A date the page itself states (URL date slug, an explicit "Last updated/Published" line, or a
+   * blog byline), when the provider gives none. Used only to show that a value predates a
+   * conversation; never to claim something changed after it.
+   */
+  pageDate?: PageDate;
+}
+
+export interface PageDate {
+  date: string;
+  basis: "url" | "page_text" | "byline";
 }
 
 export type SourceKind = "official_pricing" | "official_changelog" | "official" | "news" | "third_party";
@@ -121,6 +134,13 @@ export interface Evidence {
   quoteRepaired?: boolean;
   /** Pricing only: the price was tied to the named plan (plan named in the quote, or plan name followed by this price in the source). */
   planVerified?: boolean;
+  /** Copied from the source (see SearchResult.pageDate). */
+  pageDate?: PageDate;
+  /** Pricing only: the source says this plan is legacy / not sold to new customers (verified quote in `statusQuote`). */
+  planStatus?: "legacy";
+  statusQuote?: string;
+  /** Legacy plans: the current plan the source maps it to, if it names one. */
+  successor?: string;
 }
 
 export type ChangeStatus = "changed" | "unchanged" | "uncertain" | "not_comparable";
@@ -152,6 +172,13 @@ export interface Comparison {
    *  unknown          not determinable from the evidence
    */
   historicalAccuracy?: "consistent" | "already_outdated" | "unknown";
+  /**
+   * For "changed" rows and already-outdated rows: when the difference arose, as far as dated evidence shows.
+   *  before_conversation  a dated vendor page already showed the current value before the conversation
+   *  after_conversation   the vendor page showing the current value was published after the conversation
+   *  unknown              the pages are undated: the earlier answer no longer matches, but when it changed is unknown
+   */
+  changeTiming?: "before_conversation" | "after_conversation" | "unknown";
   explanation: string;
   /** Evidence ids supporting the current value. */
   evidenceIds: string[];
@@ -159,6 +186,16 @@ export interface Comparison {
 }
 
 /** Completeness of an earlier answer: plans offered now that it didn't discuss. Not a claim that they are new. */
+/** A plan the vendor lists as legacy (no longer sold to new customers), with its current successor if stated. */
+export interface PlanStatusNote {
+  subject: string;
+  plan: string;
+  value: string;
+  sourceId: string;
+  statusQuote: string;
+  successor?: { plan: string; value: string; sourceId: string };
+}
+
 export interface OfferingNote {
   subject: string;
   plansNotDiscussed: Array<{ plan: string; value: string; sourceId: string }>;

@@ -76,3 +76,21 @@ export function subjectMatches(a: string, b: string): boolean {
   const [small, large] = ta.length <= tb.length ? [ta, new Set(tb)] : [tb, new Set(ta)];
   return small.every((t) => large.has(t));
 }
+
+/**
+ * "Neon Launch" for subject "Neon" + plan "Launch", but just "Neon Launch" when the plan is
+ * already part of the subject (the model sometimes folds it in) or is a generic label.
+ */
+export function planLabel(subject: string, plan: string): string {
+  const s = normalizeForMatch(subject);
+  const p = normalizeForMatch(plan);
+  if (!p || /^(price|prices|pricing|plan|plans)$/.test(p) || s.includes(p)) return subject;
+  if (p.includes(s)) return plan;
+  // "HubSpot Sales Hub" + "Sales Hub Professional" → "HubSpot Sales Hub Professional".
+  const sw = subject.trim().split(/\s+/);
+  const pw = plan.trim().split(/\s+/);
+  for (let k = Math.min(sw.length, pw.length - 1); k > 0; k--) {
+    if (sw.slice(-k).join(" ").toLowerCase() === pw.slice(0, k).join(" ").toLowerCase()) return [...sw, ...pw.slice(k)].join(" ");
+  }
+  return `${subject} ${plan}`;
+}

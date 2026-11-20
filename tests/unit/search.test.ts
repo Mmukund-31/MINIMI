@@ -123,6 +123,13 @@ describe("TavilySearchProvider", () => {
     await expect(new TavilySearchProvider("k", { timeoutMs: 1000, fetchImpl: denied }).search("q", { maxResults: 3 })).rejects.toMatchObject({ code: "NOT_CONFIGURED" });
   });
 
+  it("classifies an exhausted credit quota (HTTP 432) without retrying", async () => {
+    let calls = 0;
+    const over = (async () => (calls++, new Response('{"detail":{"error":"exceeds your plan"}}', { status: 432 }))) as typeof fetch;
+    await expect(new TavilySearchProvider("k", { timeoutMs: 1000, fetchImpl: over }).search("q", { maxResults: 3 })).rejects.toMatchObject({ code: "SEARCH_QUOTA", retryable: false });
+    expect(calls).toBe(1);
+  });
+
   it("times out instead of hanging", async () => {
     const hang = ((_u: unknown, init?: RequestInit) =>
       new Promise((_r, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason)))) as typeof fetch;

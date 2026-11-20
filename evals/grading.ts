@@ -21,6 +21,12 @@ export interface GroundTruthEntry {
     forbidden?: Comparison["status"][];
     /** A second correct outcome, e.g. recognising the earlier answer was already out of date. */
     alsoCorrect?: { status: Comparison["status"]; historicalAccuracy: NonNullable<Comparison["historicalAccuracy"]> };
+    /**
+     * When dated official evidence shows the difference predates the conversation, "changed since"
+     * is wrong; but "changed" with changeTiming "unknown" (difference reported, timing explicitly
+     * not claimed) is graded as an abstention on the timing question.
+     */
+    unknownTimingChange?: "abstained";
     note?: string;
   } | null;
   review: string;
@@ -32,7 +38,7 @@ export interface GradedEntry {
   subject: string;
   plan: string;
   grade: Grade;
-  got?: { status: Comparison["status"]; dimension: Comparison["dimension"]; currentValue?: string };
+  got?: { status: Comparison["status"]; dimension: Comparison["dimension"]; currentValue?: string; changeTiming?: Comparison["changeTiming"]; historicalAccuracy?: Comparison["historicalAccuracy"] };
   provisional: boolean;
   reason: string;
 }
@@ -56,13 +62,16 @@ export function findRow(entry: { subject: string; plan: string }, comparisons: C
 export function gradeEntry(entry: GroundTruthEntry, comparisons: Comparison[]): GradedEntry {
   const row = findRow(entry, comparisons);
   const base = { subject: entry.subject, plan: entry.plan, provisional: entry.review !== "human-confirmed" };
-  const got = row ? { status: row.status, dimension: row.dimension, currentValue: row.currentValue } : undefined;
+  const got = row ? { status: row.status, dimension: row.dimension, currentValue: row.currentValue, ...(row.changeTiming ? { changeTiming: row.changeTiming } : {}), ...(row.historicalAccuracy && row.historicalAccuracy !== "unknown" ? { historicalAccuracy: row.historicalAccuracy } : {}) } : undefined;
   if (!entry.expected) return { ...base, got, grade: "ungraded", reason: entry.review };
   if (!row) return { ...base, grade: "missing", reason: "no comparison row for this subject and plan" };
   const exp = entry.expected;
   if (exp.forbidden?.includes(row.status)) return { ...base, got, grade: "wrong", reason: `status '${row.status}' is ruled out by ground truth` };
   if (exp.alsoCorrect && row.status === exp.alsoCorrect.status && row.historicalAccuracy === exp.alsoCorrect.historicalAccuracy) {
     return { ...base, got, grade: "correct", reason: `matches ground truth (${row.historicalAccuracy})` };
+  }
+  if (exp.unknownTimingChange && row.status === "changed" && row.changeTiming === "unknown" && row.dimension === exp.dimension) {
+    return { ...base, got, grade: "abstained", reason: "reported the difference but couldn't date it (timing unknown); ground truth: it predates the conversation" };
   }
   if (exp.acceptable.includes(row.status)) {
     if (row.status === "changed" && row.dimension !== exp.dimension) {
@@ -132,7 +141,8 @@ export function updateChecks(input: { comparisons: Comparison[]; sources: Source
   // Unsupported launch claims in the answer text.
   const confirmed = new Set(features.filter((c) => c.status === "changed").map((c) => c.subject));
   const subjects = [...new Set(input.comparisons.map((c) => c.subject))];
-  for (const sentence of input.answer.split(/(?<=[.!?])\s+|\n+/)) {
+  // Per clause: "HubSpot … remained on the same tiers; only Salesforce announced X" claims a launch for Salesforce only.
+  for (const sentence of input.answer.split(/(?<=[.!?])\s+|\n+|;\s+|\s[–—]\s/)) {
     if (!LAUNCH_VERB.test(sentence) || /\[S\d+\]/.test(sentence) || /\b(no|not|none|nothing|without)\b/i.test(sentence)) continue;
     for (const subject of subjects) {
       const name = subject.toLowerCase().split(/[^a-z0-9]+/).find((t) => t.length >= 3);

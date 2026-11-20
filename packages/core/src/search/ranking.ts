@@ -55,6 +55,17 @@ export function trustedDomainHint(hint: string | null | undefined): string | nul
   return d;
 }
 
+/**
+ * Domains to restrict a vendor search to: the model's hint plus the brand's .com. Models often
+ * suggest an old or secondary domain (cursor.so, neon.tech, railway.app) while the current pages
+ * live on <brand>.com. This doesn't widen trust: classification already keys on the brand label.
+ */
+export function vendorDomains(hint: string): string[] {
+  const label = registrableLabel(hint);
+  const com = label && label.length >= 3 ? `${label}.com` : null;
+  return com && com !== hint && !hint.endsWith(`.${com}`) ? [hint, com] : [hint];
+}
+
 export function isOfficialDomain(domain: string, subjects: SubjectHint[]): boolean {
   const owner = registrableLabel(domain);
   return subjects.some((s) => {

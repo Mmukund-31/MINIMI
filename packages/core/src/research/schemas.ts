@@ -55,6 +55,9 @@ export const EvidenceExtractionSchema = z.object({
         value: z.string().max(200),
         quote: z.string().max(500).describe("Verbatim text copied from the source that supports the value."),
         sourceId: z.string().max(8),
+        planStatus: z.enum(["current", "legacy"]).nullable().optional().describe("'legacy' only if the source says this plan is legacy / no longer offered to new customers."),
+        statusQuote: z.string().max(300).nullable().optional().describe("Legacy plans: verbatim text from the same source saying so."),
+        successor: z.string().max(80).nullable().optional().describe("Legacy plans: the current plan the source maps it to, if it names one."),
       }),
     )
     .max(40),

@@ -1,6 +1,6 @@
 # Live evaluation report
 
-Run on 2026-11-19T14:41:46.260Z with `npm run eval:live` · LLM: groq (openai/gpt-oss-20b, openai/gpt-oss-120b) · search: Tavily.
+Run on 2026-11-20T06:56:20.379Z with `npm run eval:live` · LLM: groq (openai/gpt-oss-20b, openai/gpt-oss-120b) · search: Tavily. Re-rendered from the saved run `live-2026-11-20T06-56-20-379Z.json`; ground-truth grading and the entity check were recomputed with the current grader, everything else is as recorded.
 Fresh temporary database seeded with the labelled demo conversations; search cache disabled; 20s pause between cases (one user asking one question at a time; Groq free-tier limits are per minute).
 
 **Automatic checks (pass/fail):** completed · retrieved the right earlier conversation · searched when expected · every [S#] resolves to a retrieved source · research answers cite something · every vendor from the earlier conversation has a comparison row · structural checks (no verdict without an official source or an explicit third-party qualification, no amount change across incompatible terms, no 'changed' resting on a page published before the conversation).
@@ -9,11 +9,11 @@ Fresh temporary database seeded with the labelled demo conversations; search cac
 
 | Case | Auto checks | Ground truth (correct / abstained / wrong / missing · ungraded) | Plan attribution verified | Latency | LLM calls | Searches | Tokens | Evidence kept / rejected |
 |---|---|---|---|---|---|---|---|---|
-| demo-crm | pass | 2 / 1 / 0 / 0 · 2 (provisional) | 2/2 | 11.0s | 4 | 10 | 12499 | 5 / 0 |
-| demo-nov3 | pass | 3 / 0 / 0 / 0 · 0 (provisional) | 15/15 | 10.7s | 4 | 3 | 13433 | 17 / 1 |
-| demo-postgres | pass | 3 / 0 / 0 / 0 · 2 (provisional) | 5/7 | 8.8s | 4 | 10 | 12543 | 9 / 0 |
-| control-research | pass | – | 5/5 | 5.2s | 4 | 2 | 8887 | 6 / 0 |
-| control-chat | pass | – | – | 1.2s | 2 | 0 | 2516 | 0 / 0 |
+| demo-crm | pass | 3 / 0 / 0 / 0 · 2 (provisional) | 3/4 | 7.1s | 4 | 10 | 13722 | 6 / 1 |
+| demo-nov3 | pass | 3 / 0 / 0 / 0 · 0 (provisional) | 7/7 | 12.7s | 4 | 4 | 13207 | 9 / 0 |
+| demo-postgres | pass | 3 / 0 / 0 / 0 · 2 (provisional) | 6/6 | 7.6s | 4 | 10 | 12858 | 7 / 0 |
+| control-research | pass | – | 2/2 | 3.8s | 4 | 2 | 13023 | 2 / 0 |
+| control-chat | pass | – | – | 1.4s | 2 | 0 | 2885 | 0 / 0 |
 
 ## demo-crm
 
@@ -22,7 +22,7 @@ Fresh temporary database seeded with the labelled demo conversations; search cac
 
 | Ground truth | Grade | System said | Why |
 |---|---|---|---|
-| Freshsales · Pro | abstained | uncertain (evidence) | expected unchanged, system abstained (uncertain) |
+| Freshsales · Pro | correct | unchanged (price_amount) | matches ground truth |
 | HubSpot Sales Hub · Professional | correct | unchanged (price_amount) | matches ground truth |
 | Salesforce Sales Cloud · Enterprise | correct | uncertain (evidence) | matches ground truth |
 | Zoho CRM · Professional | ungraded | uncertain (evidence) | not verifiable: on 2026-11-19 the calculator showed an identical '₹ 800 / Cost /user/month' on every edition tab (likely a placeholder) and the main pricing page is geo-served in INR; the round-3 'US$23' search excerpt could not be confirmed by opening the page, so the expectation was withdrawn |
@@ -33,15 +33,15 @@ Fresh temporary database seeded with the labelled demo conversations; search cac
 - Ground truth (provisional) for Salesforce Sales Cloud: found none; missed Core, Advanced, Max
 
 - Memory: found ([Demo] CRM shortlist for a 20-person sales team), On Monday → Monday, 16 November 2026
-- Searches: "HubSpot Sales Hub Professional pricing · hubspot.com" (done, 5); "Salesforce Sales Cloud Enterprise pricing · salesforce.com" (done, 5); "Pipedrive Professional pricing · pipedrive.com" (done, 5); "Salesforce Sales Cloud Enterprise pricing" (done, 5); "HubSpot Sales Hub new features announcement November 2026" (done, 5); "Salesforce Sales Cloud new features announcement November 2026" (done, 5); "Pipedrive new features announcement November 2026" (done, 5); "Zoho CRM Professional pricing · zoho.com" (done, 5); "Zoho CRM new features announcement November 2026" (done, 5); "Freshsales Pro pricing · freshsales.com" (done, 0)
+- Searches: "HubSpot Sales Hub Professional pricing 2026 · hubspot.com" (done, 5); "Salesforce Sales Cloud Enterprise pricing 2026 · salesforce.com" (done, 5); "Pipedrive Professional pricing 2026 · pipedrive.com" (done, 5); "Freshsales Pro pricing 2026 · freshworks.com" (done, 5); "Zoho CRM Professional pricing 2026 · zoho.com" (done, 5); "Salesforce Sales Cloud new features announcement November 2026" (done, 5); "HubSpot Sales Hub new features announcement November 2026" (done, 5); "Zoho CRM new features announcement November 2026" (done, 5); "Pipedrive new features announcement November 2026" (done, 5); "Freshsales new features announcement November 2026" (done, 5)
 
 | Subject | Category | Then | Now | Status | Dimension |
 |---|---|---|---|---|---|
-| HubSpot Sales Hub (Professional) | pricing | $90 per seat/month, billed annually | $90 per seat/month if billed annually | unchanged | price_amount |
+| HubSpot Sales Hub (Professional) | pricing | $90 per seat/month, billed annually | $90/month per user (billed annually) | unchanged | price_amount |
 | Salesforce Sales Cloud (Enterprise) | pricing | $165 per user/month, billed annually | - | uncertain | evidence |
 | Pipedrive (Professional) | pricing | $49 per seat/month, billed annually | - | uncertain | evidence |
 | Zoho CRM (Professional) | pricing | $23 per user/month, billed annually | - | uncertain | evidence |
-| Freshsales (Pro) | pricing | $39 per user/month, billed annually | - | uncertain | evidence |
+| Freshsales (Pro) | pricing | $39 per user/month, billed annually | $39/user/month, billed annually | unchanged | price_amount |
 | HubSpot Sales Hub (Major update) | product_update | - | - | uncertain | feature |
 | Salesforce Sales Cloud (Major update) | product_update | - | Copilotforce partnership announced | changed | feature |
 | Pipedrive (Major update) | product_update | - | - | uncertain | feature |
@@ -50,15 +50,19 @@ Fresh temporary database seeded with the labelled demo conversations; search cac
 
 **Answer:**
 
-HubSpot’s pricing stayed the same (still $90 per seat/month when billed annually) [S1]. 
-Salesforce announced a major product shift: the Copilotforce partnership, bringing Salesforce into the Microsoft Copilot ecosystem [S9]. 
-No verifiable pricing changes or major releases were found for Pipedrive, Zoho, or Freshsales, and we couldn’t confirm any recent updates for them. 
+HubSpot Sales Hub Professional and Freshsales Pro keep the same annual price as we noted on Monday (HubSpot $90 and Freshsales $39 per user) [S1][S2]. 
+Salesforce Sales Cloud Enterprise’s current price isn’t publicly confirmed in the vendor’s own page, so we can’t verify whether it has changed [S7]. However, Salesforce announced a major Copilotforce partnership on November 17 2026, a notable product update [S9]. 
+No major feature or pricing changes were found for Pipedrive, Zoho CRM, or the other plans in the time since our last discussion. 
 
-*(Note: this response is based on the seeded demo conversation from Monday.)*
+*(seeded demo data)*
+
+I couldn't verify current prices for Salesforce Sales Cloud Enterprise, Pipedrive Professional or Zoho CRM Professional: no retrievable page stated a price for these plans, so I can't say whether they changed.
 
 **Sources:**
 
 - [S1] HubSpot’s Sales Hub pricing guide — essential features for every rep (https://blog.hubspot.com/sales/hubspot-sales-hub-pricing)
+- [S2] Freshsales CRM Pricing Comparison | Freshsales (https://freshworks.com/crm/pricing-compare)
+- [S7] Salesforce Sales Pricing | Salesforce (https://salesforce.com/sales/pricing)
 - [S9] Salesforce and Microsoft Announce Copilotforce - Salesforce (https://salesforce.com/news/stories/copilotforce-announcement), published 2026-11-17
 
 ## demo-nov3
@@ -74,33 +78,37 @@ No verifiable pricing changes or major releases were found for Pipedrive, Zoho, 
 
 **Completeness (current plans not in the earlier answer):**
 
-- System listed for GitHub Copilot: Copilot Pro+ ($39 USD per month); Copilot Max ($100 USD per month)
+- System listed for GitHub Copilot: Copilot Student (Free); Copilot Pro+ ($39 USD per month.); Copilot Max ($100 USD per month)
 - Ground truth (provisional) for GitHub Copilot: found Pro+, Max
 
 - Memory: found ([Demo] GitHub Copilot plans for a team of 10), 3 November → Tuesday, 3 November 2026
-- Searches: "GitHub Copilot pricing 2026" (done, 5); "GitHub Copilot pricing 2026 · github.com" (done, 5); "GitHub Copilot new features announcement November 2026" (done, 5)
+- Searches: "GitHub Copilot new features announcement November 2026" (done, 5); "GitHub Copilot 2026 updates" (done, 5); "GitHub Copilot pricing 2026 · github.com" (done, 5); "GitHub Copilot pricing 2026" (done, 5)
 
 | Subject | Category | Then | Now | Status | Dimension |
 |---|---|---|---|---|---|
-| GitHub Copilot (price) | pricing | $0, with limited completions and chat requests per month | - | uncertain | evidence |
-| GitHub Copilot (Copilot Pro) | pricing | $10 per month | $10 USD per month | unchanged | price_amount |
+| GitHub Copilot (Copilot Pro) | pricing | $10 per month | $10 USD per month (free for some users) | unchanged | price_amount |
 | GitHub Copilot (Copilot Business) | pricing | $19 per user/month | $19 USD per granted seat per month | unchanged | price_amount |
-| GitHub Copilot (Copilot Enterprise) | pricing | $39 per user/month (requires GitHub Enterprise Cloud) | $39 USD per granted seat per month | unchanged | price_amount |
-| GitHub Copilot (Possible update) | product_update | - | GitHub Copilot moving to usage-based billing | uncertain | feature |
+| GitHub Copilot (Copilot Enterprise) | pricing | $39 per user/month | $39 USD per granted seat per month | unchanged | price_amount |
+| GitHub Copilot (Possible update) | product_update | - | GitHub Copilot is moving to usage-based billing | uncertain | feature |
 
 **Answer:**
 
-On 3 Nov 2026 you asked how much GitHub Copilot costs for a team of 10 developers and which plans exist. 
-The pricing you were given—$10 / month for Copilot Pro, $19 / seat for Copilot Business, and $39 / seat for Copilot Enterprise—is still accurate today [S5]. That means a 10‑developer team would still pay $190 / month for Business or $390 / month for Enterprise. 
+You asked on 3 Nov 2026 how much GitHub Copilot would cost a team of 10 developers and what plans were available. That answer – listing Copilot Free, Copilot Pro ($10 / user / month), Copilot Business ($19 / seat / month), and Copilot Enterprise ($39 / seat / month) – was correct then [S5]. 
 
-However, two additional plans are now offered that weren’t mentioned in that earlier answer: Copilot Pro+ at $39 / month and Copilot Max at $100 / month [S5]. There is also an announced shift toward usage‑based billing, but it is not yet clear whether that change is in effect [S2].
+**What changed since then** 
+GitHub switched Copilot to usage‑based billing from 1 June 2026, so the fixed per‑seat prices are no longer the billing basis; cost now depends on AI‑credit usage or Actions minutes consumed [S2][S7]. 
+
+**What remains true** 
+The names of the plans (Free, Pro, Business, Enterprise) and the per‑seat price amounts for those plans were unchanged at the time of the earlier answer [S5], and the Enterprise plan still requires GitHub Enterprise Cloud [S5]. 
+
+**New offerings now** 
+In addition to the plans mentioned earlier, GitHub now offers Copilot Student (Free) and higher‑tier plans such as Copilot Pro+ ($39 / month) and Copilot Max ($100 / month), which were not part of the 3 Nov 2026 answer [S5].
 
 **Sources:**
 
 - [S2] GitHub Copilot is moving to usage-based billing - The GitHub Blog (https://github.blog/news-insights/company-news/github-copilot-is-moving-to-usage-based-billing)
 - [S5] Plans for GitHub Copilot - GitHub Docs (https://docs.github.com/en/copilot/get-started/plans)
-- [S7] GitHub Copilot licenses - GitHub Docs (https://docs.github.com/en/billing/concepts/product-billing/github-copilot-licenses)
-- [S9] GitHub Copilot Pricing 2026: Plans, Per-Seat Cost in USD and INR (https://opslyft.com/blog/github-copilot-pricing)
+- [S7] The new GitHub Copilot plans are an absolute disaster · community · Discussion #197782 · GitHub (https://github.com/orgs/community/discussions/197782)
 
 ## demo-postgres
 
@@ -111,57 +119,61 @@ However, two additional plans are now offered that weren’t mentioned in that e
 |---|---|---|---|
 | Supabase · Pro | correct | unchanged (price_amount) | matches ground truth |
 | Railway · Hobby | correct | unchanged (price_amount) | matches ground truth |
-| Neon · Launch | correct | changed (pricing_model) | matches ground truth |
+| Neon · Launch | correct | uncertain (pricing_model) | matches ground truth (already_outdated) |
 | Render · Basic-1gb | ungraded | uncertain (evidence) | not verifiable: Postgres instance prices are not in the fetched page text (JavaScript-rendered) |
 | AWS RDS for PostgreSQL · db.t4g.micro | ungraded | uncertain (evidence) | not verifiable: regional instance price tables are JavaScript-rendered; not fetched |
 
 - Memory: found ([Demo] Managed Postgres hosting options), Last Tuesday → Tuesday, 17 November 2026
-- Searches: "Render Postgres Basic-1gb pricing · render.com" (done, 5); "Neon Launch pricing · neon.tech" (done, 5); "Supabase Pro pricing · supabase.com" (done, 5); "Railway Hobby pricing · railway.app" (done, 5); "Supabase Pro pricing" (done, 5); "Neon Launch pricing" (done, 5); "Render Postgres Basic-1gb pricing" (done, 5); "AWS RDS db.t4g.micro pricing" (done, 5); "AWS RDS db.t4g.micro pricing · aws.amazon.com" (done, 5); "Railway Hobby pricing" (done, 5)
+- Searches: "Render Postgres Basic-1gb pricing · render.com" (done, 5); "Supabase Pro pricing · supabase.com" (done, 5); "Neon Launch pricing · neon.tech" (done, 5); "Railway Hobby pricing · railway.app" (done, 5); "Neon Launch pricing" (done, 5); "AWS RDS db.t4g.micro pricing · aws.amazon.com" (done, 5); "Supabase Pro pricing" (done, 5); "AWS RDS db.t4g.micro pricing" (done, 5); "Render Postgres Basic-1gb pricing" (done, 5); "Neon Launch pricing change (timing check)" (done, 5)
 - Notes: Interpreted "Last Tuesday" as Tuesday, 17 November 2026 (the most recent such weekday).
 
 | Subject | Category | Then | Now | Status | Dimension |
 |---|---|---|---|---|---|
-| Neon (Launch) | pricing | $19 per month | $0.106 per CU-hour | changed | pricing_model |
-| Supabase (Pro) | pricing | $25 per month per organization | $25 per month | unchanged | price_amount |
-| Render (Basic-1gb) | pricing | $19 per month | - | uncertain | evidence |
-| AWS RDS for PostgreSQL (db.t4g.micro) | pricing | about $0.016 per hour on-demand in us-east-1 (~$12/month) plus storage | - | uncertain | evidence |
-| Railway (Hobby) | pricing | $5 per month, including $5 of usage | $5/mo | unchanged | price_amount |
+| Neon Launch (Neon Launch) | pricing | $19 per month | $0.106 per CU-hour and $0.35 per GB-month | uncertain | pricing_model |
+| Supabase Pro (Supabase Pro) | pricing | $25 per month per organization | $25/ month | unchanged | price_amount |
+| Render Postgres Basic-1gb (Render Postgres Basic-1gb) | pricing | $19 per month | - | uncertain | evidence |
+| AWS RDS for PostgreSQL (db.t4g.micro) (AWS RDS for PostgreSQL (db.t4g.micro)) | pricing | about $0.016 per hour on-demand in us-east-1 (~$12/month) plus storage | - | uncertain | evidence |
+| Railway Hobby (Railway Hobby) | pricing | $5 per month, including $5 of usage | $5/mo | unchanged | price_amount |
 
 **Answer:**
 
-Neon’s pricing model has changed since the last conversation, while Supabase Pro and Railway Hobby remain the same. Render and AWS RDS pricing details are still unverified. 
+Neon’s pricing model has shifted to usage‑based, Supabase Pro and Railway Hobby have stayed the same, and there is no current evidence that Render or AWS RDS changed.
 
-- **Neon Launch**: The flat $19 / month rate from 17 Nov 2026 was replaced by a usage‑based model of $0.106 per CU‑hour (plus $0.35 / GB‑month storage) [S7]. 
-- **Supabase Pro**: The $25 / month per organization price is unchanged on comparable terms [S2]. 
-- **Railway Hobby**: The $5 / month price is still in effect [S5]. 
-- **Render Basic‑1 GB**: No current evidence confirms a price; the previous $19 / month figure is uncertain. 
-- **AWS RDS db.t4g.micro**: Current on‑demand pricing is not verifiable from the available pages; earlier estimates of ~$12 / month are uncertain. 
+- **Neon Launch** – The plan now charges $0.106 per CU‑hour and $0.35 per GB‑month, with no monthly minimum [S4][S6]. 
+ The earlier answer already listed this model before the 2026‑11‑17 conversation, so nothing has changed since then. 
+- **Supabase Pro** – Still $25 per month per organization [S1]. 
+- **Railway Hobby** – Still $5 per month (subscription includes $5 of usage) [S3]. 
+- **Render Postgres Basic‑1gb** – No current pricing evidence is available; the latest pages did not reveal a price [S9]. 
+- **AWS RDS (db.t4g.micro)** – No current pricing evidence is available; the latest pages did not reveal a price [S10].
 
-The earlier answer (17 Nov 2026) correctly listed Neon at $19 / month, Supabase at $25 / month, Render at $19 / month, AWS RDS at ~$12 / month, and Railway at $5 / month [S2] [S4]. The only confirmed change is Neon’s shift from a flat rate to usage‑based pricing.
+I couldn't verify current prices for Render Postgres Basic-1gb or AWS RDS for PostgreSQL (db.t4g.micro): no retrievable page stated a price for these plans, so I can't say whether they changed.
+
+Neon Launch: The vendor's own page (dated 2025-08-14, from its byline, before our conversation on 2026-11-17) already listed Neon Launch as usage-based ($0.106 per CU-hour) [S4] [S6]. The earlier answer was likely already out of date when given; this doesn't show a change since then. [S4][S6]
 
 **Sources:**
 
-- [S2] Pricing & Fees | Supabase (https://supabase.com/pricing)
-- [S4] How much does a database-only Supabase project cost? | Supabase Knowledge Base (https://supabase.com/kb/faqs/platform/database-only-cost)
-- [S5] Pricing | Railway Docs (https://docs.railway.app/pricing)
-- [S7] What are the limits and quotas for Neon's Free plan? - Neon FAQs (https://neon.tech/unify?a=9b8c4834-5d58-49ee-b654-a9a54a67429a&n=faqs%2Ffree-plan-limits-and-quotas)
+- [S1] Pricing & Fees | Supabase (https://supabase.com/pricing)
+- [S3] Pricing | Railway Docs (https://docs.railway.com/pricing)
+- [S4] What are the limits and quotas for Neon's Free plan? - Neon FAQs (https://neon.com/faqs/free-plan-limits-and-quotas)
+- [S6] Neon’s New Pricing, Explained: Usage-Based, No Minimum (https://neon.com/blog/new-usage-based-pricing)
+- [S9] How much does cloud application hosting cost for small businesses (https://render.com/articles/how-much-does-cloud-application-hosting-cost-for-small-businesses)
+- [S10] Amazon RDS for MySQL pricing (https://aws.amazon.com/rds/mysql/pricing)
 
 ## control-research
 
 > What is the current price of the Cursor Pro plan?
 
 - Memory: not_requested
-- Searches: "Cursor Pro pricing" (done, 5); "Cursor Pro pricing · cursor.com" (done, 5)
+- Searches: "Cursor Pro plan pricing" (done, 5); "Cursor Pro plan pricing · cursor.so" (done, 5)
 
 **Answer:**
 
-The Cursor Pro plan is priced at $20 per month [S1] [S3]. It’s now a usage‑credit model that includes $20 of frontier‑model usage per month at API pricing [S1][S2]
+Cursor Pro is no longer offered to new customers; it is a legacy plan listed as $20 / mo in the old pricing schedule [S1]. New users must choose the next tier, Premium, which costs $30 / mo [S3]. If you are an existing Pro subscriber you can keep the plan until you decide to upgrade or cancel [S1].
 
 **Sources:**
 
 - [S1] Pricing and plans | Cursor Docs (https://cursor.com/help/account-and-billing/pricing)
-- [S2] Clarifying our pricing · Cursor (https://cursor.com/blog/june-2025-pricing)
-- [S3] Cursor pricing explained: plans, credit system, and real costs in 2026 (https://jetadmin.io/blog/cursor-pricing-explained-plans-credit-system-and-real-costs-in-2026)
+- [S3] Models & Pricing | Cursor Docs (https://cursor.com/docs/models-and-pricing)
 
 ## control-chat
 
@@ -171,16 +183,7 @@ The Cursor Pro plan is priced at $20 per month [S1] [S3]. It’s now a u
 
 **Answer:**
 
-I can help with a wide range of topics, such as:
-
-- **Information & explanations** – facts, definitions, or background on science, history, technology, culture, and more.
-- **Practical guidance** – how‑to advice, troubleshooting tips, recipe steps, travel planning, and lifestyle recommendations.
-- **Creative support** – brainstorming ideas, drafting stories, poems, emails, or marketing copy.
-- **Technical help** – coding assistance, debugging, data analysis explanations, and understanding algorithms.
-- **Learning & study aid** – summarizing concepts, explaining difficult subjects, and preparing for exams.
-- **Decision making** – comparing options, evaluating pros and cons, and providing insights for choices you’re facing.
-
-Feel free to ask anything that’s on your mind, and I’ll do my best to assist!
+I can help with a wide range of questions—anything from quick facts and explanations to deeper research, summarizations, data interpretation, or brainstorming ideas. Just let me know what you need!
 
 ## Run history
 
@@ -207,3 +210,15 @@ Every complete live run saved in `evals/results/` (checks and grades as recorded
 | 2026-11-19 14:30 | 5/5 | 3 / 4 / 0 / 1 |  |
 | 2026-11-19 14:35 | 5/5 | 7 / 1 / 0 / 0 |  |
 | 2026-11-19 14:41 | 5/5 | 8 / 1 / 0 / 0 |  |
+| 2026-11-19 17:47 | 4/5 | 8 / 1 / 0 / 0 |  |
+| 2026-11-20 06:30 | 5/5 | 8 / 1 / 0 / 0 |  |
+| 2026-11-20 06:34 | 4/5 | 8 / 1 / 0 / 0 |  |
+| 2026-11-20 06:39 | 5/5 | 9 / 0 / 0 / 0 |  |
+| 2026-11-20 06:43 | 5/5 | 8 / 1 / 0 / 0 |  |
+| 2026-11-20 06:46 | 5/5 | 9 / 0 / 0 / 0 |  |
+| 2026-11-20 06:50 | 5/5 | 8 / 1 / 0 / 0 |  |
+| 2026-11-20 06:52 | 5/5 | 9 / 0 / 0 / 0 |  |
+| 2026-11-20 06:56 | 5/5 | 9 / 0 / 0 / 0 |  |
+| 2026-11-20 07:06 | 4/5 | 9 / 0 / 0 / 0 |  |
+| 2026-11-20 07:08 | 1/5 | 3 / 0 / 0 / 6 | 4 case(s) failed: daily quota exhausted |
+| 2026-11-20 07:11 | 0/5 | 0 / 0 / 0 / 9 | 5 case(s) failed: daily quota exhausted |

@@ -33,7 +33,7 @@ export class TavilySearchProvider implements SearchProvider {
       search_depth: depth,
       max_results: options.maxResults,
       include_answer: false,
-      include_raw_content: false,
+      include_raw_content: options.rawContent ? "markdown" : false,
       topic: options.topic ?? "general",
     };
     if (depth === "advanced") body.chunks_per_source = 3;
@@ -55,6 +55,10 @@ export class TavilySearchProvider implements SearchProvider {
         });
         if (res.status === 401 || res.status === 403) {
           throw new AppError("NOT_CONFIGURED", "Tavily rejected the API key (check TAVILY_API_KEY).");
+        }
+        if (res.status === 432 || res.status === 433) {
+          // Plan / pay-as-you-go credit limit: retrying can't help until the quota resets.
+          throw new AppError("SEARCH_QUOTA", "The web-search quota (Tavily credits) is exhausted, so nothing could be searched. It resets with the Tavily plan, or use another TAVILY_API_KEY.");
         }
         if (res.status === 429 || res.status >= 500) {
           lastErr = new AppError("SEARCH_ERROR", `Tavily returned HTTP ${res.status}.`, { retryable: true });
@@ -79,7 +83,7 @@ export class TavilySearchProvider implements SearchProvider {
                 publishedAt: r.published_date,
                 providerScore: r.score,
               },
-              { provider: this.name, query, retrievedAt },
+              { provider: this.name, query, retrievedAt, fullText: options.rawContent },
             ),
           )
           .filter((r): r is SearchResult => r !== null);

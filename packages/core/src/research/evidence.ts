@@ -2,6 +2,7 @@ import { newId } from "../shared/ids";
 import { containsNormalized, normalizeForMatch, subjectMatches, subjectTokens } from "../shared/text";
 import type { Evidence, HistoricalClaim, MemoryExchange, Source, SourceKind } from "../shared/types";
 import { isPlanlessAttribute } from "./change-detector";
+import { LEGACY_WORDING, NEW_CUSTOMER_WORDING } from "./plan-status";
 import { extractNumbers } from "./price";
 import type { EvidenceExtraction, Plan } from "./schemas";
 
@@ -177,7 +178,7 @@ export function validateEvidence(extraction: EvidenceExtraction, sources: Source
     return null;
   };
 
-  const push = (e: Omit<Evidence, "id" | "sourceUrl" | "sourceTitle" | "sourceKind" | "publishedAt" | "retrievedAt" | "evidenceType" | "strength">) => {
+  const push = (e: Omit<Evidence, "id" | "sourceUrl" | "sourceTitle" | "sourceKind" | "publishedAt" | "pageDate" | "retrievedAt" | "evidenceType" | "strength">) => {
     const src = byId.get(e.sourceId.trim().toUpperCase())!;
     const key = `${src.id}|${normalizeForMatch(e.subject)}|${normalizeForMatch(e.attribute)}|${normalizeForMatch(e.value)}`;
     if (seen.has(key)) return;
@@ -190,6 +191,7 @@ export function validateEvidence(extraction: EvidenceExtraction, sources: Source
       sourceTitle: src.title,
       sourceKind: src.kind,
       publishedAt: src.publishedAt,
+      ...(src.pageDate ? { pageDate: src.pageDate } : {}),
       retrievedAt: src.retrievedAt,
       evidenceType: "current",
       strength: STRENGTH[src.kind],
@@ -214,6 +216,7 @@ export function validateEvidence(extraction: EvidenceExtraction, sources: Source
       rejected.push({ reason, sourceId: f.sourceId, value: f.value, quote: f.quote });
       continue;
     }
+    const legacy = f.category === "pricing" && f.planStatus === "legacy" ? verifyLegacy(src!, quote, f.attribute, f.statusQuote, f.successor, f.subject) : null;
     push({
       claim: `${f.subject} ${f.attribute}: ${f.value}`,
       subject: f.subject,
@@ -227,6 +230,7 @@ export function validateEvidence(extraction: EvidenceExtraction, sources: Source
       ...(f.category === "pricing"
         ? { planVerified: !isPlanlessAttribute(f.attribute) && planAttributionVerified(sourceText(src!), quote, f.attribute, f.value, f.subject) }
         : {}),
+      ...(legacy ?? {}),
     });
   }
   for (const u of extraction.updates) {
@@ -247,6 +251,45 @@ export function validateEvidence(extraction: EvidenceExtraction, sources: Source
     });
   }
   return { evidence, rejected, proposed: extraction.findings.length + extraction.updates.length };
+}
+
+/**
+ * A "legacy plan" flag survives only if the model's status quote is verbatim in the same source,
+ * contains legacy wording, and is tied to this plan: the quote names the plan, the page is about
+ * legacy plans (URL/title), or the price quote sits within ~1,500 chars after the legacy wording.
+ * The successor is kept only if the source names it.
+ */
+export function verifyLegacy(
+  src: Source,
+  priceQuote: string,
+  plan: string,
+  statusQuote: string | null | undefined,
+  successor: string | null | undefined,
+  subject: string,
+): Pick<Evidence, "planStatus" | "statusQuote" | "successor"> | null {
+  if (!statusQuote || normalizeForMatch(statusQuote).length < 8) return null;
+  const text = sourceText(src);
+  if (!quoteFound(text, statusQuote) || !LEGACY_WORDING.test(statusQuote) || looksLikeInjection(statusQuote)) return null;
+  const brand = new Set(subjectTokens(subject));
+  const core = normalizeLoose(plan).split(" ").filter((t) => t && !brand.has(t) && !PLAN_FILLER.has(t));
+  const sq = ` ${normalizeLoose(statusQuote)} `;
+  const namesPlan = core.length > 0 && core.every((t) => sq.includes(` ${t} `));
+  const legacyPage = /legacy/i.test(`${src.url} ${src.title}`);
+  const hay = normalizeLoose(text);
+  const at = hay.indexOf(normalizeLoose(statusQuote));
+  const priceAt = hay.indexOf(normalizeLoose(priceQuote), Math.max(0, at));
+  const near = at >= 0 && priceAt >= 0 && priceAt - at <= 1_500;
+  if (!namesPlan && !legacyPage && !near) return null;
+  const succ = successor && normalizeLoose(successor).length >= 2 && hay.includes(normalizeLoose(successor)) ? successor.trim() : undefined;
+  // The model often quotes a heading ("Which plans are legacy?"). Prefer the page's own sentence that
+  // says new customers can't buy legacy plans, verbatim from the same source.
+  const better = NEW_CUSTOMER_WORDING.test(statusQuote)
+    ? null
+    : (text
+        .split(/(?<=[.!?])\s+|\n+/)
+        .map((s) => s.replace(/\s+/g, " ").trim())
+        .find((s) => s.length >= 20 && s.length <= 300 && NEW_CUSTOMER_WORDING.test(s) && (LEGACY_WORDING.test(s) || /\blegacy\b/i.test(text))) ?? null);
+  return { planStatus: "legacy", statusQuote: better ?? statusQuote, ...(succ ? { successor: succ } : {}) };
 }
 
 /**

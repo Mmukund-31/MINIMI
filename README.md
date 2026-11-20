@@ -4,7 +4,7 @@ A chat agent with **one tool: web search**. It remembers past conversations, wor
 
 Built for the minimi Software Engineering Internship challenge. Design rationale (one page): [DESIGN.md](DESIGN.md).
 
-![Answer to the CRM question: then-vs-now pricing table built from official pricing pages](docs/screenshots/crm.png)
+![CRM shortlist: HubSpot and Freshsales unchanged on official pages, the other three honestly marked unverified, product updates checked per vendor](docs/screenshots/crm.png)
 
 ## Quick start
 
@@ -34,11 +34,11 @@ The app starts without keys; the UI banner and `/api/health` say what's missing.
 
 ![Empty-chat screen with the three challenge prompts as one-click examples, seeded demo history in the sidebar](docs/screenshots/home.png)
 
+![Postgres since last Tuesday: Neon's flat-to-usage change found on Neon's own blog dated 2025-08-14, so the earlier answer was already out of date (not a change since); Supabase and Railway unchanged; Render and AWS unverified](docs/screenshots/postgres.png)
+
 ![3 November recall: Copilot Pro, Business and Enterprise prices unchanged; Pro+ and Max listed as also offered now](docs/screenshots/nov3.png)
 
-![Postgres since last Tuesday: Neon changed pricing model (flat to usage-based), Supabase and Railway unchanged, Render and AWS uncertain](docs/screenshots/postgres.png)
-
-Screenshots are from the final app against live Groq + Tavily on 2026-11-19. Live output varies between runs.
+Screenshots are from the app against live Groq + Tavily (CRM and Postgres on 2026-11-20, 3 November on 2026-11-19). Live output varies between runs.
 
 Every row in the table carries a **status** (changed / unchanged / uncertain / not comparable) and the **dimension** it concerns (price, pricing model, billing terms, currency, plan availability, features). Sources show whether they are the vendor's own page or third-party, plus their publish date (or "no publish date").
 
@@ -82,22 +82,24 @@ evals/          offline scenarios, live runner, grading, ground truth, reports
 
 | Command | What it checks | Last result |
 |---|---|---|
-| `npm test` | 177 unit + integration tests (Fastify inject, deterministic doubles, no network) | 177/177 |
+| `npm test` | 226 unit + integration tests (Fastify inject, deterministic doubles, no network) | 226/226 |
 | `npm run eval` | 54 deterministic scenarios: dates, memory, research, pricing, completeness, updates, multi-turn, uncertainty, adversarial, the 3 demos. Report: [evals/REPORT.md](evals/REPORT.md) | 54/54 |
-| `npm run eval:live` | the 3 demos + 2 controls against real Groq + Tavily. Structural + product-update checks, completeness grading, and verdict grading against [human-reviewable ground truth](evals/ground-truth.json). Report: [evals/LIVE_REPORT.md](evals/LIVE_REPORT.md) | 5/5 auto checks; 8 correct / 1 abstained / 0 wrong, provisional (2026-11-19, [details](docs/evaluation.md#round-4-submission-verification-2026-11-19)) |
+| `npm run eval:live` | the 3 demos + 2 controls against real Groq + Tavily. Structural + product-update checks, completeness grading, and verdict grading against [human-reviewable ground truth](evals/ground-truth.json). Report: [evals/LIVE_REPORT.md](evals/LIVE_REPORT.md) | 2026-11-20, nine complete runs: 77 correct / 4 abstained / **0 wrong** (provisional ground truth); last complete run 5/5 auto checks, 9/0/0. [Details](docs/evaluation.md#live-validation-2026-11-20) |
 | `npm run eval:perf` | searches, LLM calls, tokens and per-stage latency computed from saved live runs (no API calls) | see [docs/evaluation.md](docs/evaluation.md) |
 | `npm run lint` · `npm run typecheck` · `npm run build` | ESLint, strict tsc, production build | clean |
 
 CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs a clean `npm ci`, typecheck, lint, tests, offline evaluation and build on Ubuntu (Node 22 and 24) and Windows (Node 24).
 
-Offline scenarios test the deterministic machinery against known model outputs. They don't measure live model quality. The live suite does, graded against ground truth taken from official pages and **marked provisional until a person confirms it** (currently agent-verified, not human-confirmed). Automatic checks don't judge answer prose: in the final live run the Postgres answer overstates when Neon changed, and the Cursor control omits that Pro is a legacy plan (see [docs/evaluation.md](docs/evaluation.md)).
+Offline scenarios test the deterministic machinery against known model outputs. They don't measure live model quality. The live suite does, graded against ground truth taken from official pages and **marked provisional until a person confirms it** (currently agent-verified, not human-confirmed). Automatic checks don't judge answer prose. A code-level answer guard enforces the facts that live runs showed the model dropping or contradicting: "not checked" vs "none found", unverified prices called unchanged, launches no dated row supports, when a change happened, "not comparable" presented as a change, legacy plans, and prices that appear in no source. Other wording is still the model's.
 
 ## Known limitations
 
 - Vendor pages that render prices with JavaScript, and sites that block fetchers, give "uncertain" rows.
-- Groq's free tier has per-model quotas (8K tokens/min; 200K tokens/day measured for `gpt-oss-120b`). Heavy use falls back to the smaller model, with a note in the answer.
+- Groq's free tier has per-model quotas (8K tokens/min and a daily token cap). Heavy use falls back to the smaller model, with a note in the answer; about nine full live-eval runs in a day exhausted it on 2026-11-20.
 - Live results vary between runs because search results and model outputs vary.
-- Answer prose can overstate or drop qualifiers that the comparison table states correctly: the table is computed in code, the prose is written by the model.
+- The comparison table is computed in code and the answer guard enforces specific facts. Beyond those, the prose is the model's and can still drop a qualifier.
+- Vendor pricing pages are rarely dated. When no self-dated vendor page is found, a difference is reported as "timing unknown", not as a change since the conversation.
+- The free search tier (Tavily, 1,000 credits/month) limits live runs; once it's exhausted, searches fail with HTTP 432 and answers say nothing could be checked.
 - Seed prices are best-effort demo data, so a "changed" verdict can reflect seed inaccuracy.
 - Single user, single SQLite file, no authentication.
 
